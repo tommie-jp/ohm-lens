@@ -59,6 +59,7 @@ getUserMedia
 | パス | 内容 |
 | ------ | ------ |
 | [docs/01-設計.md](docs/01-設計.md) | 設計メモ（アーキテクチャ、ライブラリ選定、ホスティング、ネーミング調査） |
+| [docs/02-実装計画.md](docs/02-実装計画.md) | 実装計画（Phase 0 のタスク分解、リポジトリ構成、リスク） |
 | `diagrams/` | ブロック図・状態遷移図（PlantUML ソースと生成 PNG） |
 | [CHANGELOG.md](CHANGELOG.md) | 変更履歴 |
 
