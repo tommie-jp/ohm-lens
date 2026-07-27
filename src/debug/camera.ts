@@ -1,4 +1,12 @@
 import {
+  analysisSize,
+  createBudget,
+  frameStats,
+  recordFrame,
+  type BudgetState,
+  type FrameStats,
+} from './frameBudget.js';
+import {
   buildVideoConstraints,
   displayCameraLabel,
   manualColorConstraints,
@@ -20,8 +28,6 @@ import {
 /** 解析に回すフレームの最大レート。設計メモの想定は 5〜10fps。 */
 const DEFAULT_ANALYSIS_FPS = 8;
 
-/** 解析用に縮小する長辺の画素数。フィクスチャハーネスと揃えてある。 */
-const ANALYSIS_MAX_SIZE = 800;
 
 export interface CameraStatus {
   readonly label: string;
@@ -36,6 +42,8 @@ export interface CameraOptions {
   readonly analysisFps?: number;
   /** 間引いたフレームごとに呼ばれる。縮小済みの canvas を渡す。 */
   readonly onFrame: (frame: HTMLCanvasElement) => void;
+  /** 負荷の実測値。fps 表示と自動調整の状況を出すのに使う。 */
+  readonly onStats?: (stats: FrameStats, analysisPx: number) => void;
   readonly onError: (error: unknown) => void;
 }
 
@@ -63,9 +71,9 @@ async function tryLockColor(track: MediaStreamTrack): Promise<boolean> {
  * 映像フレームを解析しやすい大きさの canvas に写す。
  * 元解像度のまま解析すると重いので長辺を抑える。
  */
-function drawScaled(video: HTMLVideoElement, canvas: HTMLCanvasElement): void {
+function drawScaled(video: HTMLVideoElement, canvas: HTMLCanvasElement, maxSize: number): void {
   const { videoWidth, videoHeight } = video;
-  const scale = Math.min(1, ANALYSIS_MAX_SIZE / Math.max(videoWidth, videoHeight));
+  const scale = Math.min(1, maxSize / Math.max(videoWidth, videoHeight));
   const width = Math.max(1, Math.round(videoWidth * scale));
   const height = Math.max(1, Math.round(videoHeight * scale));
 
@@ -112,7 +120,7 @@ export async function startCamera(options: CameraOptions): Promise<CameraSession
   };
 
   const frameCanvas = document.createElement('canvas');
-  const minInterval = 1000 / (options.analysisFps ?? DEFAULT_ANALYSIS_FPS);
+  let budget: BudgetState = createBudget(options.analysisFps ?? DEFAULT_ANALYSIS_FPS);
   let stopped = false;
   let handle: number | null = null;
   let lastAnalysed = 0;
@@ -121,14 +129,19 @@ export async function startCamera(options: CameraOptions): Promise<CameraSession
     if (stopped) return;
 
     const now = performance.now();
-    if (now - lastAnalysed >= minInterval) {
+    if (now - lastAnalysed >= 1000 / budget.targetFps) {
       lastAnalysed = now;
+      const started = performance.now();
       try {
-        drawScaled(video, frameCanvas);
+        drawScaled(video, frameCanvas, analysisSize(budget));
         options.onFrame(frameCanvas);
       } catch (error) {
         options.onError(error);
       }
+      // 実測して間引き間隔と解析解像度を自動調整する
+      budget = recordFrame(budget, performance.now() - started);
+      const stats = frameStats(budget);
+      if (stats !== null) options.onStats?.(stats, analysisSize(budget));
     }
     schedule();
   };
@@ -141,7 +154,7 @@ export async function startCamera(options: CameraOptions): Promise<CameraSession
     if (stopped) return;
     handle = hasFrameCallback
       ? video.requestVideoFrameCallback(onFrame)
-      : window.setTimeout(onFrame, minInterval);
+      : window.setTimeout(onFrame, 1000 / budget.targetFps);
   };
 
   schedule();

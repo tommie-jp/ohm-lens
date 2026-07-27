@@ -124,3 +124,108 @@ td {
 td select {
   font-size: 0.85rem;
 }
+
+/* ---- モバイル対応 ---------------------------------------------------- */
+
+/* ROI ドラッグとページスクロールが競合しないようにする。
+   pointer events で自前処理しているので、ブラウザのジェスチャは止める。 */
+#source-canvas {
+  touch-action: none;
+}
+
+/* 読み取り結果はカメラ直下に大きく。スマホでは最優先の情報。 */
+.result-card {
+  padding: 0.75rem 1rem;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: color-mix(in srgb, currentColor 4%, transparent);
+}
+
+.learn-card {
+  padding: 0.75rem 1rem;
+  border: 1px solid color-mix(in srgb, #00b0ff 45%, transparent);
+  border-radius: 8px;
+}
+
+/* 詳細は折りたたむ。開いたときだけ場所を取る。 */
+.fold > summary {
+  cursor: pointer;
+  padding: 0.5rem 0;
+  font-weight: 600;
+  font-size: 0.95rem;
+  border-bottom: 1px solid var(--border);
+}
+
+.fold[open] > summary {
+  margin-bottom: 0.75rem;
+}
+
+/* 画面下部の固定バー。スマホで親指が届く位置に主要操作を置く。 */
+.sticky-bar {
+  position: fixed;
+  inset: auto 0 0 0;
+  display: none;
+  gap: 0.75rem;
+  align-items: center;
+  padding: 0.6rem 1rem calc(0.6rem + env(safe-area-inset-bottom));
+  border-top: 1px solid var(--border);
+  background: Canvas;
+}
+
+.sticky-reading {
+  flex: 1;
+  font-size: 1.35rem;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+
+@media (max-width: 640px) {
+  body {
+    padding: 0.75rem 0.75rem 5rem; /* 固定バーのぶん余白を空ける */
+  }
+
+  h1 {
+    font-size: 1.15rem;
+  }
+
+  section,
+  .fold {
+    margin-block: 1.25rem;
+  }
+
+  /* タップターゲットを 44px 以上に */
+  button,
+  select,
+  input[type='text'],
+  input[type='file'] {
+    min-height: 44px;
+    font-size: 1rem;
+  }
+
+  .controls {
+    gap: 0.5rem;
+  }
+
+  .controls > label {
+    display: flex;
+    align-items: center;
+    gap: 0.4rem;
+  }
+
+  /* バンド表は横スクロールさせる（本文は横に溢れさせない） */
+  #bands-table {
+    font-size: 0.8rem;
+  }
+
+  .reading {
+    font-size: 1.75rem;
+  }
+
+  .sticky-bar:not([hidden]) {
+    display: flex;
+  }
+
+  .sticky-bar button {
+    padding-inline: 1.1rem;
+  }
+}

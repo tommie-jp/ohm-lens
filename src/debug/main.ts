@@ -12,6 +12,7 @@ import {
 } from '../core/learning.js';
 import { parseOhms } from '../core/value/parseOhms.js';
 import { clearObservations, loadObservations, saveObservations } from './learnStore.js';
+import { releaseWakeLock, requestWakeLock } from './wakeLock.js';
 import { formatOhms, formatReading, MIN_REPORTABLE_CONFIDENCE } from '../core/format.js';
 import { clamp } from '../core/math.js';
 import type { Band, BandColor, LabColor } from '../types.js';
@@ -69,6 +70,10 @@ const elements = {
   learnCounts: requireElement<HTMLParagraphElement>('#learn-counts'),
   learnExport: requireElement<HTMLButtonElement>('#learn-export'),
   learnClear: requireElement<HTMLButtonElement>('#learn-clear'),
+  perfStatus: requireElement<HTMLSpanElement>('#perf-status'),
+  stickyBar: requireElement<HTMLDivElement>('#sticky-bar'),
+  stickyReading: requireElement<HTMLOutputElement>('#sticky-reading'),
+  stickyLearn: requireElement<HTMLButtonElement>('#sticky-learn'),
 };
 
 /** 選択肢に出すバンド色。 */
@@ -120,6 +125,7 @@ function requireElement<T extends Element>(selector: string): T {
 
 function setSource(canvas: HTMLCanvasElement): void {
   source = canvas;
+  updateStickyBar();
   elements.sourceCanvas.width = canvas.width;
   elements.sourceCanvas.height = canvas.height;
   context2d(elements.sourceCanvas).drawImage(canvas, 0, 0);
@@ -361,7 +367,9 @@ async function loadPaletteFromServer(): Promise<void> {
 }
 
 function renderReading(result: AnalysisResult): void {
-  elements.reading.textContent = formatReading(result.reading);
+  const text = formatReading(result.reading);
+  elements.reading.textContent = text;
+  elements.stickyReading.textContent = text;
 
   const rows: [string, string][] = [];
   if (result.reading !== null) {
@@ -413,11 +421,18 @@ function setCameraRunning(running: boolean): void {
   elements.cameraSelect.hidden = !running;
 }
 
+/** 画像かカメラが載っていれば、下部の固定バーを出す。 */
+function updateStickyBar(): void {
+  elements.stickyBar.hidden = source === null;
+}
+
 function stopCamera(): void {
   camera?.stop();
   camera = null;
   setCameraRunning(false);
   elements.cameraStatus.textContent = '';
+  elements.perfStatus.textContent = '';
+  void releaseWakeLock();
 }
 
 /** カメラ一覧をプルダウンに反映する（ラベルは権限取得後でないと空になる）。 */
@@ -443,7 +458,12 @@ async function beginCamera(deviceId?: string): Promise<void> {
       ...(deviceId === undefined ? {} : { deviceId }),
       onFrame: (frame) => {
         source = frame;
+        updateStickyBar();
         analyzeSelection();
+      },
+      onStats: (stats, analysisPx) => {
+        elements.perfStatus.textContent =
+          `${stats.fps.toFixed(1)}fps / ${stats.meanMs.toFixed(0)}ms / 解析 ${analysisPx}px`;
       },
       onError: (error) => {
         console.error(error);
@@ -456,11 +476,40 @@ async function beginCamera(deviceId?: string): Promise<void> {
   }
 
   setCameraRunning(true);
+  void requestWakeLock();
   const { status } = camera;
   elements.cameraStatus.textContent =
     `${status.label} ${status.width}x${status.height}` +
     (status.manualColorLocked ? ' / WB・露出を固定' : ' / WB・露出は自動（この環境では固定不可）');
   await refreshCameraList();
+}
+
+/**
+ * クリップボードへコピーする。失敗したら手動選択できるよう表示に落とす。
+ * iOS Safari はユーザー操作の文脈から外れると writeText を拒否するため、
+ * 「コピーできない」で終わらせず必ず取り出せる経路を残す。
+ */
+function copyOrShow(text: string, target: HTMLElement, status: HTMLElement): void {
+  const fallback = (): void => {
+    target.textContent = text;
+    status.textContent = 'コピーできなかったので下に表示しました（長押しで選択）';
+    const range = document.createRange();
+    range.selectNodeContents(target);
+    const selection = window.getSelection();
+    selection?.removeAllRanges();
+    selection?.addRange(range);
+  };
+
+  if (typeof navigator.clipboard?.writeText !== 'function') {
+    fallback();
+    return;
+  }
+  navigator.clipboard.writeText(text).then(
+    () => {
+      status.textContent = 'コピーしました';
+    },
+    fallback,
+  );
 }
 
 function learnFromCurrent(): void {
@@ -505,25 +554,27 @@ function learnFromCurrent(): void {
 
 elements.learnButton.addEventListener('click', learnFromCurrent);
 
+elements.stickyLearn.addEventListener('click', () => {
+  // 入力欄が畳まれた位置にあってもすぐ打てるように、まず focus を移す
+  if (elements.learnValue.value.trim() === '') {
+    elements.learnValue.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    elements.learnValue.focus();
+    return;
+  }
+  learnFromCurrent();
+});
+
 elements.learnValue.addEventListener('keydown', (event) => {
   if (event.key === 'Enter') learnFromCurrent();
 });
 
 elements.learnExport.addEventListener('click', () => {
-  const learned = paletteOverrides(observations);
   const text = JSON.stringify(
-    { generatedFrom: 'browser learning', colors: learned },
+    { generatedFrom: 'browser learning', colors: paletteOverrides(observations) },
     null,
     2,
   );
-  navigator.clipboard.writeText(text).then(
-    () => {
-      elements.learnStatus.textContent = 'palette.json 用の JSON をコピーしました';
-    },
-    () => {
-      elements.learnStatus.textContent = 'コピーできませんでした';
-    },
-  );
+  copyOrShow(text, elements.labelJson, elements.learnStatus);
 });
 
 elements.learnClear.addEventListener('click', () => {
@@ -590,16 +641,7 @@ elements.clearLabels.addEventListener('click', () => {
 });
 
 elements.copyLabel.addEventListener('click', () => {
-  const text = formatLabels(savedLabels);
-  navigator.clipboard.writeText(text).then(
-    () => {
-      elements.copyStatus.textContent = 'コピーしました';
-    },
-    (error: unknown) => {
-      console.error(error);
-      elements.copyStatus.textContent = 'コピーできませんでした（手動で選択してください）';
-    },
-  );
+  copyOrShow(formatLabels(savedLabels), elements.labelJson, elements.copyStatus);
 });
 
 elements.sourceCanvas.addEventListener('pointerdown', (event) => {
@@ -625,6 +667,17 @@ elements.sourceCanvas.addEventListener('pointerup', (event) => {
   elements.sourceCanvas.releasePointerCapture(event.pointerId);
   dragStart = null;
   analyzeSelection();
+});
+
+/**
+ * タブが背面に回るとカメラのストリームは止まり、Wake Lock も解除される。
+ * 復帰時に取り直す（iOS Safari では特に顕著）。
+ */
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState !== 'visible') return;
+  if (camera === null) return;
+  void requestWakeLock();
+  if (camera.video.paused) void camera.video.play().catch(() => undefined);
 });
 
 void loadPaletteFromServer();

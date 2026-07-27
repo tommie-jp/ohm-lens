@@ -2,7 +2,11 @@
 <html lang="ja">
   <head>
     <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta
+      name="viewport"
+      content="width=device-width, initial-scale=1.0, viewport-fit=cover"
+    />
+    <meta name="theme-color" content="#00b0ff" />
     <title>OhmLens — Phase 0 デバッグ</title>
     <link
       rel="icon"
@@ -21,7 +25,7 @@
 
     <main>
       <section>
-        <h2>1. 画像</h2>
+        <h2>1. 入力</h2>
         <div class="controls">
           <input type="file" id="file-input" />
           <button type="button" id="sample-button">合成サンプルを読み込む</button>
@@ -41,6 +45,7 @@
           <span id="palette-status">学習パレット: 確認中…</span>
           <span id="format-status"></span>
           <span id="camera-status"></span>
+          <span id="perf-status"></span>
         </p>
         <p class="hint" id="roi-hint">画像を読み込んでください。</p>
         <div class="canvas-wrap">
@@ -48,28 +53,31 @@
         </div>
       </section>
 
-      <section>
-        <h2>2. ROI（水平化済みとして扱う切り出し）</h2>
+      <section class="result-card">
+        <h2>2. 読み取り結果</h2>
+        <output id="reading" class="reading">?</output>
+        <dl id="reading-detail" class="detail"></dl>
+      </section>
+
+      <details class="fold">
+        <summary>ROI と 1D カラープロファイル</summary>
+        <p class="hint">列ごとの中央値を Lab に変換したもの。上段が色、下段が L*。</p>
         <div class="canvas-wrap">
           <canvas id="roi-canvas" class="roi"></canvas>
         </div>
-      </section>
-
-      <section>
-        <h2>3. 1D カラープロファイル</h2>
-        <p class="hint">列ごとの中央値を Lab に変換したもの。上段が色、下段が L*。</p>
         <div class="canvas-wrap">
           <canvas id="profile-canvas" class="roi"></canvas>
         </div>
-      </section>
+      </details>
 
-      <section>
-        <h2>4. バンド抽出と分類（推測。誤っていれば直してください）</h2>
+      <details class="fold">
+        <summary>バンド抽出と分類（推測。誤っていれば直せます）</summary>
         <p class="hint">
           色のプルダウンを直すと、下の「正解ラベル」が更新されます。修正した
           ラベルは <code>sample/labels.json</code> に貼ると較正に反映されます。
         </p>
-        <table id="bands-table">
+        <div class="canvas-wrap">
+          <table id="bands-table">
           <thead>
             <tr>
               <th>#</th>
@@ -81,12 +89,13 @@
             </tr>
           </thead>
           <tbody></tbody>
-        </table>
+          </table>
+        </div>
         <p class="hint" id="bands-empty">まだ解析していません。</p>
-      </section>
+      </details>
 
-      <section>
-        <h2>5. 値で学習（カメラ・画像共通）</h2>
+      <section class="learn-card">
+        <h2>3. 値で学習</h2>
         <p class="hint">
           映っている抵抗の<strong>正解値</strong>を入力して「学習」を押すと、
           値から逆算したバンド列を検出結果に対応付け、基準色を実写に合わせて
@@ -118,8 +127,8 @@
         </div>
       </section>
 
-      <section>
-        <h2>6. 正解ラベル（バンド列を直す場合）</h2>
+      <details class="fold">
+        <summary>正解ラベル（バンド列を直す場合）</summary>
         <div class="controls">
           <label>
             ファイル名
@@ -136,14 +145,13 @@
           <code>sample/labels.json</code> にそのまま貼れます。
         </p>
         <pre id="label-json" class="code">（バンドを検出すると表示されます）</pre>
-      </section>
-
-      <section>
-        <h2>7. 読み取り結果</h2>
-        <output id="reading" class="reading">?</output>
-        <dl id="reading-detail" class="detail"></dl>
-      </section>
+      </details>
     </main>
+
+    <div class="sticky-bar" id="sticky-bar" hidden>
+      <output id="sticky-reading" class="sticky-reading">?</output>
+      <button type="button" id="sticky-learn">値で学習</button>
+    </div>
 
     <script type="module" src="./main.ts"></script>
   </body>
