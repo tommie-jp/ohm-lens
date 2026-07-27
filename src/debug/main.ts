@@ -1,6 +1,6 @@
 import { analyzeRoi, type AnalysisResult } from '../core/pipeline.js';
 import { locateResistor, type OrientedBox } from '../core/locate.js';
-import { refineBoxByBands } from '../core/refine.js';
+import { refineBoxExtent } from '../core/refine.js';
 import { analyzeOptions, refineOptions, ROI_OPTIONS } from '../core/settings.js';
 import { rectify } from '../core/rectify.js';
 import type { RoiImage } from '../core/bands/profile.js';
@@ -214,7 +214,7 @@ function buildRoi(): RoiImage | null {
       return null;
     }
     // カラーコードの並びで枠を広げ直す（バッチ・較正と同じ経路）
-    const box = refineBoxByBands(located, image, refineOptions(activePalette() ?? undefined));
+    const box = refineBoxExtent(located, image, refineOptions(activePalette() ?? undefined));
     detectedBox = box;
     statusParts.detection = `検出 ${box.angleDeg.toFixed(0)}° / ${Math.round(box.length)}px`;
     renderStatus();

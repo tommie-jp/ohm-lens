@@ -4,7 +4,7 @@ import sharp from 'sharp';
 import { loadRoiImage } from '../src/annotate/pipeline.js';
 import { analyzeOptions, refineOptions, ROI_OPTIONS } from '../src/core/settings.js';
 import { locateResistor } from '../src/core/locate.js';
-import { refineBoxByBands } from '../src/core/refine.js';
+import { refineBoxExtent } from '../src/core/refine.js';
 import { rectify } from '../src/core/rectify.js';
 import { analyzeRoi } from '../src/core/pipeline.js';
 import { splitRuns, identifyBody } from '../src/core/bands/runs.js';
@@ -107,7 +107,7 @@ for (const path of paths) {
     continue;
   }
 
-  const box = refineBoxByBands(located, image, refineOptions(palette));
+  const box = refineBoxExtent(located, image, refineOptions(palette));
   const roi = rectify(image, box, ROI_OPTIONS);
   const result = analyzeRoi(roi, analyzeOptions(box, palette));
 

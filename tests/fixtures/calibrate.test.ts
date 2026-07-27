@@ -3,7 +3,7 @@ import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { extractProfile } from '../../src/core/bands/profile.js';
 import { locateResistor } from '../../src/core/locate.js';
-import { refineBoxByBands } from '../../src/core/refine.js';
+import { refineBoxExtent } from '../../src/core/refine.js';
 import { rectify } from '../../src/core/rectify.js';
 import { bodyColumns } from '../../src/core/roiMapping.js';
 import { bandRuns } from '../../src/core/bands/segment.js';
@@ -110,7 +110,7 @@ describe.skipIf(!hasSamples())('基準色の較正', () => {
 
       const rectifyOptions = { padding: ROI_PADDING, targetHeight: ROI_HEIGHT };
       // 解析側と同じく、カラーコードの並びで枠を広げ直してから切り出す
-      const box = refineBoxByBands(located, image, {
+      const box = refineBoxExtent(located, image, {
         rectify: rectifyOptions,
         segment: { palette, bodyLightnessWeight: BODY_LIGHTNESS_WEIGHT },
       });

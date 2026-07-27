@@ -1,36 +1,39 @@
 import { describe, expect, it } from 'vitest';
-import { refineBoxByBands } from '../../src/core/refine.js';
+import { refineBoxExtent } from '../../src/core/refine.js';
 import type { OrientedBox } from '../../src/core/locate.js';
 import type { RoiImage } from '../../src/core/bands/profile.js';
 
 type Rgb = readonly [number, number, number];
 
-const BODY: Rgb = [205, 178, 132];
-const BACKGROUND: Rgb = [250, 250, 250];
-const BAND_COLORS: Rgb[] = [
-  [150, 60, 40],
-  [40, 40, 40],
-  [190, 60, 50],
-  [60, 90, 170],
-  [190, 150, 40],
-  [70, 130, 80],
-];
+const CARPET: Rgb = [70, 58, 48];
+const BODY: Rgb = [170, 70, 60];
+const BAND_DARK: Rgb = [35, 30, 28];
+const BAND_LIGHT: Rgb = [215, 212, 205];
+const LEAD: Rgb = [150, 150, 152];
 
 interface SceneSpec {
   readonly width: number;
   readonly height: number;
-  /** 本体の長軸方向の範囲 */
   readonly bodyStart: number;
   readonly bodyEnd: number;
   readonly thickness: number;
-  /** バンドの本数。等間隔・等幅で並べる */
-  readonly bands: number;
-  readonly bandWidth: number;
+  /** 本体色（既定は赤いボディ） */
+  readonly body?: Rgb;
+  /** 背景色（既定は暗いカーペット） */
+  readonly background?: Rgb;
+  /** バンドを置く位置（本体の左端からの距離）と色 */
+  readonly bands?: readonly (readonly [number, Rgb])[];
+  /** 本体の外に伸びるリード線を描くか */
+  readonly leads?: boolean;
 }
 
-/** 水平に置いた抵抗器を描く（バンドは等間隔）。 */
-function drawResistor(spec: SceneSpec): RoiImage {
-  const { width, height, bodyStart, bodyEnd, thickness, bands, bandWidth } = spec;
+const BAND_WIDTH = 10;
+
+/** 水平に置いた抵抗器を描く。 */
+function drawScene(spec: SceneSpec): RoiImage {
+  const { width, height, bodyStart, bodyEnd, thickness } = spec;
+  const background = spec.background ?? CARPET;
+  const body = spec.body ?? BODY;
   const data = new Uint8ClampedArray(width * height * 4);
   const centerY = height / 2;
 
@@ -45,21 +48,18 @@ function drawResistor(spec: SceneSpec): RoiImage {
     }
   };
 
-  fill(0, width, 0, height, BACKGROUND);
-  fill(bodyStart, bodyEnd, centerY - thickness / 2, centerY + thickness / 2, BODY);
-
-  // バンドは本体の中央 70% に等間隔で置く
-  const span = (bodyEnd - bodyStart) * 0.7;
-  const first = bodyStart + (bodyEnd - bodyStart) * 0.15;
-  const pitch = bands > 1 ? span / bands : span;
-  for (let index = 0; index < bands; index += 1) {
-    const at = first + pitch * index;
+  fill(0, width, 0, height, background);
+  if (spec.leads === true) {
+    fill(0, width, centerY - thickness * 0.12, centerY + thickness * 0.12, LEAD);
+  }
+  fill(bodyStart, bodyEnd, centerY - thickness / 2, centerY + thickness / 2, body);
+  for (const [at, rgb] of spec.bands ?? []) {
     fill(
-      at,
-      at + bandWidth,
+      bodyStart + at,
+      bodyStart + at + BAND_WIDTH,
       centerY - thickness / 2,
       centerY + thickness / 2,
-      BAND_COLORS[index % BAND_COLORS.length] as Rgb,
+      rgb,
     );
   }
 
@@ -68,13 +68,18 @@ function drawResistor(spec: SceneSpec): RoiImage {
 }
 
 const SCENE: SceneSpec = {
-  width: 400,
-  height: 200,
-  bodyStart: 80,
-  bodyEnd: 320,
+  width: 480,
+  height: 220,
+  bodyStart: 100,
+  bodyEnd: 380,
   thickness: 80,
-  bands: 5,
-  bandWidth: 12,
+  bands: [
+    [30, BAND_DARK],
+    [80, BAND_LIGHT],
+    [130, BAND_DARK],
+    [180, BAND_LIGHT],
+    [230, BAND_DARK],
+  ],
 };
 
 const TRUE_BOX: OrientedBox = {
@@ -85,66 +90,97 @@ const TRUE_BOX: OrientedBox = {
   thickness: SCENE.thickness,
 };
 
-describe('refineBoxByBands', () => {
-  it('本体の右半分しか捉えていない枠を、バンドの並びから広げる', () => {
-    // Arrange: 正しい枠の右半分だけを覆う仮の枠
-    const image = drawResistor(SCENE);
-    const half: OrientedBox = {
-      ...TRUE_BOX,
-      centerX: TRUE_BOX.centerX + TRUE_BOX.length / 4,
-      length: TRUE_BOX.length / 2,
-    };
+/** 本体の右側だけを覆う仮の枠。 */
+const RIGHT_HALF: OrientedBox = {
+  ...TRUE_BOX,
+  centerX: TRUE_BOX.centerX + TRUE_BOX.length / 4,
+  length: TRUE_BOX.length / 2,
+};
+
+describe('refineBoxExtent', () => {
+  it('本体の右半分しか捉えていない枠を、本体色をたどって左へ伸ばす', () => {
+    // Arrange
+    const image = drawScene(SCENE);
 
     // Act
-    const refined = refineBoxByBands(half, image);
+    const refined = refineBoxExtent(RIGHT_HALF, image);
 
     // Assert: 本体の長さに近づき、中心も本体の中心へ寄る
-    expect(refined.length).toBeGreaterThan(half.length * 1.5);
-    expect(Math.abs(refined.centerX - TRUE_BOX.centerX)).toBeLessThan(
-      Math.abs(half.centerX - TRUE_BOX.centerX),
-    );
+    expect(refined.length).toBeGreaterThan(TRUE_BOX.length * 0.8);
+    expect(Math.abs(refined.centerX - TRUE_BOX.centerX)).toBeLessThan(TRUE_BOX.length * 0.15);
+  });
+
+  it('バンド（短い別色）は跨いで進む', () => {
+    // Arrange: バンドを 5 本置いた場面で、左端のバンドより外まで伸びること
+    const image = drawScene(SCENE);
+
+    // Act
+    const refined = refineBoxExtent(RIGHT_HALF, image);
+
+    // Assert: 最初のバンド（本体左端 + 30）より左まで到達している
+    const left = refined.centerX - refined.length / 2;
+    expect(left).toBeLessThan(SCENE.bodyStart + 30);
+  });
+
+  it('リード線（長く続く別色）で止まる', () => {
+    // Arrange: 本体の外へリード線が伸びている
+    const image = drawScene({ ...SCENE, leads: true });
+
+    // Act
+    const refined = refineBoxExtent(RIGHT_HALF, image);
+
+    // Assert: リード線まで飲み込まない
+    expect(refined.length).toBeLessThan(TRUE_BOX.length * 1.25);
+  });
+
+  it('本体と背景の色が近いときは伸ばさない', () => {
+    // Arrange: 背景も本体もほぼ同じベージュ（色で追えない）
+    const image = drawScene({
+      ...SCENE,
+      background: [200, 176, 140],
+      body: [205, 180, 144],
+      bands: [],
+    });
+
+    // Act
+    const refined = refineBoxExtent(RIGHT_HALF, image);
+
+    // Assert
+    expect(refined).toEqual(RIGHT_HALF);
   });
 
   it('すでに正しい枠はほとんど動かさない', () => {
     // Arrange
-    const image = drawResistor(SCENE);
+    const image = drawScene(SCENE);
 
     // Act
-    const refined = refineBoxByBands(TRUE_BOX, image);
+    const refined = refineBoxExtent(TRUE_BOX, image);
 
     // Assert
-    expect(refined.length).toBeGreaterThan(TRUE_BOX.length * 0.85);
-    expect(refined.length).toBeLessThan(TRUE_BOX.length * 1.2);
-    expect(Math.abs(refined.centerX - TRUE_BOX.centerX)).toBeLessThan(TRUE_BOX.length * 0.1);
+    expect(refined.length).toBeGreaterThan(TRUE_BOX.length * 0.9);
+    expect(refined.length).toBeLessThan(TRUE_BOX.length * 1.15);
   });
 
-  it('バンドが見つからない画像では枠を変えない', () => {
-    // Arrange: 一様な背景だけ
-    const data = new Uint8ClampedArray(400 * 200 * 4).fill(250);
-    const image: RoiImage = { width: 400, height: 200, data };
+  it('太さと角度は変えない', () => {
+    // Arrange
+    const image = drawScene(SCENE);
 
     // Act
-    const refined = refineBoxByBands(TRUE_BOX, image);
+    const refined = refineBoxExtent(RIGHT_HALF, image);
 
     // Assert
-    expect(refined).toEqual(TRUE_BOX);
+    expect(refined.thickness).toBe(RIGHT_HALF.thickness);
+    expect(refined.angleDeg).toBe(RIGHT_HALF.angleDeg);
   });
 
-  it('傾いた抵抗器でも長軸方向にだけ伸ばす', () => {
-    // Arrange: 30 度傾けた同じ場面を、傾いた仮の枠で見る
-    const image = drawResistor(SCENE);
-    const tilted: OrientedBox = {
-      ...TRUE_BOX,
-      angleDeg: 0,
-      centerX: TRUE_BOX.centerX + TRUE_BOX.length / 4,
-      length: TRUE_BOX.length / 2,
-    };
+  it('伸ばした結果がカラーコードとして成立しないなら元の枠を返す', () => {
+    // Arrange: バンドが 1 本もない棒。伸ばしてもカラーコードにならない
+    const image = drawScene({ ...SCENE, bands: [] });
 
     // Act
-    const refined = refineBoxByBands(tilted, image);
+    const refined = refineBoxExtent(RIGHT_HALF, image);
 
-    // Assert: 太さと角度は変えない
-    expect(refined.thickness).toBe(tilted.thickness);
-    expect(refined.angleDeg).toBe(tilted.angleDeg);
+    // Assert
+    expect(refined).toEqual(RIGHT_HALF);
   });
 });

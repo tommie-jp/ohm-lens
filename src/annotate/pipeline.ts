@@ -2,7 +2,7 @@ import sharp from 'sharp';
 import { analyzeRoi } from '../core/pipeline.js';
 import { locateResistor } from '../core/locate.js';
 import { rectify } from '../core/rectify.js';
-import { refineBoxByBands } from '../core/refine.js';
+import { refineBoxExtent } from '../core/refine.js';
 import { analyzeOptions, refineOptions, ROI_OPTIONS } from '../core/settings.js';
 import { formatOhms } from '../core/format.js';
 import { jointReadResistor } from '../core/value/jointDecode.js';
@@ -93,7 +93,7 @@ export async function annotateImage(
   }
 
   // カラーコードの並びを手がかりに、枠を長軸方向へ広げ直す
-  const box = refineBoxByBands(located, image, refineOptions(palette));
+  const box = refineBoxExtent(located, image, refineOptions(palette));
   const roi = rectify(image, box, ROI_OPTIONS);
   const result = analyzeRoi(roi, analyzeOptions(box, palette));
   // 役割つきの解釈が要るので、同じランで joint デコードを取り直す
