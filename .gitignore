@@ -38,3 +38,7 @@ Thumbs.db
 
 # Windows のダウンロード時メタデータ（WSL で混入する孤立ファイル）
 *:Zone.Identifier
+sample-report.txt
+diagnose-report.txt
+sweep-report.txt
+calibration.txt

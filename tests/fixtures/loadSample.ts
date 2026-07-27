@@ -1,0 +1,67 @@
+import { existsSync, readFileSync } from 'node:fs';
+import { join } from 'node:path';
+import sharp from 'sharp';
+import type { RoiImage } from '../../src/core/bands/profile.js';
+
+/**
+ * sample/ の写真をフィクスチャとして読み込む。
+ *
+ * sample/ は本リポジトリの**外**（親ディレクトリの作業用リポジトリ）にある。
+ * 公開リポジトリだけをクローンした環境では存在しないので、呼び出し側は
+ * {@link hasSamples} で存在を確認してスキップすること。
+ */
+
+const SAMPLE_DIR = join(import.meta.dirname, '../../../sample');
+
+/** 解析前に縮小する長辺の画素数。元は 3000px 級で、そのままだと遅い。 */
+const DECODE_MAX_SIZE = 800;
+
+export interface SampleEntry {
+  readonly file: string;
+  readonly ohms: number;
+  readonly tolerance: number | null;
+  /** 実物のバンド列が判明している場合のみ */
+  readonly bands: readonly string[] | null;
+  readonly source: string;
+}
+
+export function hasSamples(): boolean {
+  return existsSync(join(SAMPLE_DIR, 'MANIFEST.json'));
+}
+
+/** MANIFEST.json から期待値つきのエントリを読み出す。 */
+export function loadManifest(): SampleEntry[] {
+  const raw = readFileSync(join(SAMPLE_DIR, 'MANIFEST.json'), 'utf-8');
+  const items = JSON.parse(raw) as {
+    file: string;
+    expected: { ohms: number; tolerance: number | null } | null;
+    bands?: string[];
+    source?: string;
+  }[];
+
+  return items
+    .filter((item) => item.expected !== null && existsSync(join(SAMPLE_DIR, item.file)))
+    .map((item) => ({
+      file: item.file,
+      ohms: (item.expected as { ohms: number }).ohms,
+      tolerance: (item.expected as { tolerance: number | null }).tolerance,
+      bands: item.bands ?? null,
+      source: item.source ?? 'commons',
+    }));
+}
+
+/** 写真を RGBA の生ピクセルとして読み込む（長辺 800px に縮小）。 */
+export async function loadImage(file: string): Promise<RoiImage> {
+  const { data, info } = await sharp(join(SAMPLE_DIR, file))
+    .rotate() // EXIF の向きを反映
+    .resize({ width: DECODE_MAX_SIZE, height: DECODE_MAX_SIZE, fit: 'inside', withoutEnlargement: true })
+    .ensureAlpha()
+    .raw()
+    .toBuffer({ resolveWithObject: true });
+
+  return {
+    width: info.width,
+    height: info.height,
+    data: new Uint8ClampedArray(data.buffer, data.byteOffset, data.byteLength),
+  };
+}
