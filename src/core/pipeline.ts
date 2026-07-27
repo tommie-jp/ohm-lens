@@ -43,6 +43,15 @@ export interface AnalyzeOptions {
    * 基準色を較正したあとに再評価する価値はある。
    */
   readonly normalizeShading?: boolean;
+  /**
+   * 本体が ROI のどの列を占めるかの事前情報（`bodyColumns` の結果）。
+   *
+   * 与えると、プロファイルからの推定（`bodyExtent`）ではなくこれを使う。
+   * 39 枚の実測では推定が 25 枚で外れており（広すぎ 10・狭すぎ 15）、
+   * 広すぎれば背景がバンドになり、狭すぎれば端のバンドが消えていた。
+   * 検出側が本体の位置を持っているので、そちらを信じるほうが確実。
+   */
+  readonly bodyRange?: BodyExtent;
 }
 
 export interface AnalysisResult {
@@ -78,10 +87,19 @@ export function analyzeRoi(image: RoiImage, options: AnalyzeOptions = {}): Analy
       ? normalizeLightness(extracted, options.normalize ?? {})
       : extracted;
 
+  // 検出側から本体の位置をもらえるなら、推定はせずそれを使う
+  const prior =
+    options.bodyRange === undefined
+      ? null
+      : {
+          start: Math.max(0, Math.round(options.bodyRange.start)),
+          end: Math.min(rawProfile.length, Math.round(options.bodyRange.end)),
+        };
+
   // 1 回目: ROI 全体のアンカーで粗く補正し、本体範囲を掴む
   const coarse = shouldAdapt ? buildBodyAnchorAdaptation(rawProfile) : null;
   const coarseProfile = applyAdaptation(rawProfile, coarse?.adaptation ?? null);
-  const coarseExtent = bodyExtent(coarseProfile, options.extent ?? {});
+  const coarseExtent = prior ?? bodyExtent(coarseProfile, options.extent ?? {});
 
   // 2 回目: 本体範囲の画素だけでアンカーを取り直す
   const bodySamples =
@@ -89,7 +107,7 @@ export function analyzeRoi(image: RoiImage, options: AnalyzeOptions = {}): Analy
   const refined = shouldAdapt ? buildBodyAnchorAdaptation(bodySamples) : null;
   const profile = applyAdaptation(rawProfile, refined?.adaptation ?? null);
 
-  const extent = bodyExtent(profile, options.extent ?? {}) ?? coarseExtent;
+  const extent = prior ?? bodyExtent(profile, options.extent ?? {}) ?? coarseExtent;
   const analysed = extent === null ? profile : profile.slice(extent.start, extent.end);
 
   const segmentOptions = options.segment ?? {};

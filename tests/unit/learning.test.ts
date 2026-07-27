@@ -184,6 +184,39 @@ describe('addObservations / paletteOverrides', () => {
     expect(overrides.red?.l).toBe(50);
   });
 
+  it('既定の基準色からかけ離れた学習結果は採用しない', () => {
+    // Arrange: 金を「ほぼ白」と学習してしまった状況。実写 39 枚で実際に起きた
+    // （背景や肩のランに金が対応付けられ、L126 の白として学習された）
+    let observations: Observations = {};
+    for (let i = 0; i < 5; i += 1) {
+      observations = addObservations(observations, [
+        { color: 'gold', lab: { l: 126, a: -7, b: 9 } },
+        { color: 'red', lab: labOf('red') },
+      ]);
+    }
+
+    // Act
+    const overrides = paletteOverrides(observations, 3);
+
+    // Assert: 赤は採用、金は既定値のまま
+    expect(overrides.red).toBeDefined();
+    expect(overrides.gold).toBeUndefined();
+  });
+
+  it('妥当な範囲のずれなら採用する（実写に合わせるのが目的なので）', () => {
+    // Arrange: 青は基準が彩度過剰で、実写とは 49 ほど離れるが正しい
+    let observations: Observations = {};
+    for (let i = 0; i < 3; i += 1) {
+      observations = addObservations(observations, [{ color: 'blue', lab: { l: 41, a: -7, b: -28 } }]);
+    }
+
+    // Act
+    const overrides = paletteOverrides(observations, 3);
+
+    // Assert
+    expect(overrides.blue).toBeDefined();
+  });
+
   it('色ごとの保存件数に上限がある（古いものから捨てる）', () => {
     // Arrange
     let observations: Observations = {};

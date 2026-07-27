@@ -1,3 +1,4 @@
+import { BAND_REFERENCE_COLORS } from './color/colors.js';
 import type { BandColor, LabColor } from '../types.js';
 import { alignRunsToBands } from './bands/align.js';
 import { DEFAULT_PALETTE, type Palette } from './color/palette.js';
@@ -162,8 +163,18 @@ function medianOf(values: readonly number[]): number {
 }
 
 /**
+ * 学習結果が既定の基準色からこれ以上離れていたら採用しない。
+ *
+ * 既定値は見た目からの推定なので実写とは 30〜50 ずれる（青や紫は基準が
+ * 彩度過剰なため 50 近い）。それを超えるずれは学習ではなく誤対応の結果。
+ * 実測では金が「L126 のほぼ白」（ずれ 78）として 15 件も学習され、金は
+ * 4 本帯の許容差バンドなので読み取り全体を壊していた。
+ */
+const MAX_REFERENCE_DRIFT = 60;
+
+/**
  * 観測から基準色の上書きを作る（各成分の中央値）。
- * 件数が足りない色は上書きせず、既定値のまま残す。
+ * 件数が足りない色と、既定値からかけ離れた色は上書きしない。
  */
 export function paletteOverrides(
   observations: Observations,
@@ -175,11 +186,22 @@ export function paletteOverrides(
     readonly LabColor[],
   ][]) {
     if (samples.length < minSamples) continue;
-    overrides[color] = {
+    const learned = {
       l: medianOf(samples.map((lab) => lab.l)),
       a: medianOf(samples.map((lab) => lab.a)),
       b: medianOf(samples.map((lab) => lab.b)),
     };
+    if (referenceDrift(learned, BAND_REFERENCE_COLORS[color]) > MAX_REFERENCE_DRIFT) continue;
+    overrides[color] = learned;
   }
   return overrides;
+}
+
+/** 既定の基準色からのずれ（CIE76）。 */
+function referenceDrift(learned: LabColor, reference: LabColor): number {
+  return Math.hypot(
+    learned.l - reference.l,
+    learned.a - reference.a,
+    learned.b - reference.b,
+  );
 }

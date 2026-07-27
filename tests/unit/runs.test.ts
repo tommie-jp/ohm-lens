@@ -174,3 +174,107 @@ describe('identifyBody', () => {
     expect(body?.runIndices).toEqual([0, 2]);
   });
 });
+
+describe('identifyBody — 円筒の陰影で明度が変わる本体', () => {
+  /** 同じ色相のまま明度だけ落とす（円筒の端の陰影）。 */
+  const shaded = (rgb: Rgb, factor: number): Rgb =>
+    [
+      Math.round(rgb[0] * factor),
+      Math.round(rgb[1] * factor),
+      Math.round(rgb[2] * factor),
+    ] as const;
+
+  it('明度の重みを下げると、陰で暗くなった本体も本体として拾う', () => {
+    // Arrange: 中央が明るく、両端が暗いベージュ本体。間に赤バンド
+    const runs = splitRuns(
+      profileOf([
+        [shaded(BODY_SRGB.beige, 0.62), 6],
+        [BAND_SRGB.red, 4],
+        [BODY_SRGB.beige, 8],
+        [BAND_SRGB.red, 4],
+        [shaded(BODY_SRGB.beige, 0.62), 6],
+      ]),
+    );
+
+    // Act
+    const body = identifyBody(runs, undefined, 0.35);
+
+    // Assert: 明暗 3 つのランがすべて本体（バンドは残る）
+    expect(body?.runIndices).toEqual([0, 2, 4]);
+  });
+
+  it('明度の重みを下げても、明度だけが違う黒バンドは本体に吸収しない', () => {
+    // Arrange: ベージュ本体に黒バンド（黒は彩度がほぼ 0 でベージュと離れている）
+    const runs = splitRuns(
+      profileOf([
+        [BODY_SRGB.beige, 8],
+        [BAND_SRGB.black, 4],
+        [BODY_SRGB.beige, 8],
+      ]),
+    );
+
+    // Act
+    const body = identifyBody(runs, undefined, 0.35);
+
+    // Assert
+    expect(body?.runIndices).toEqual([0, 2]);
+  });
+
+  it('重みを指定しなければ従来どおり（明度も等しく効く）', () => {
+    // Arrange
+    const runs = splitRuns(
+      profileOf([
+        [shaded(BODY_SRGB.beige, 0.62), 6],
+        [BAND_SRGB.red, 4],
+        [BODY_SRGB.beige, 8],
+      ]),
+    );
+
+    // Act
+    const body = identifyBody(runs);
+
+    // Assert: 暗いベージュは別クラスタになる
+    expect(body?.runIndices).toEqual([2]);
+  });
+});
+
+describe('identifyBody — 代表色での取り込み直し', () => {
+  it('明るい端から始まる本体でも、暗い端まで 1 つの本体にまとめる', () => {
+    // Arrange: 明るい端 → 中間 → 暗い端、と段階的に暗くなる本体。
+    // 先頭のランとだけ比べると、暗い端が閾値から外れて別扱いになる。
+    const runs = splitRuns(
+      profileOf([
+        [[214, 188, 140], 5], // 明るいベージュ
+        [BAND_SRGB.red, 4],
+        [[178, 154, 112], 8], // 中間（本体の代表色）
+        [BAND_SRGB.red, 4],
+        [[140, 120, 86], 5], // 暗いベージュ
+      ]),
+    );
+
+    // Act
+    const body = identifyBody(runs, undefined, 0.7);
+
+    // Assert
+    expect(body?.runIndices).toEqual([0, 2, 4]);
+  });
+
+  it('取り込み直しでもバンドは吸収しない', () => {
+    // Arrange
+    const runs = splitRuns(
+      profileOf([
+        [BODY_SRGB.beige, 8],
+        [BAND_SRGB.red, 4],
+        [BODY_SRGB.beige, 8],
+        [BAND_SRGB.blue, 4],
+        [BODY_SRGB.beige, 8],
+      ]),
+    );
+
+    // Act
+    const body = identifyBody(runs, undefined, 0.7);
+
+    // Assert
+    expect(body?.runIndices).toEqual([0, 2, 4]);
+  });
+});

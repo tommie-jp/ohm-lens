@@ -53,6 +53,9 @@ const DEFAULT_MIN_RUN_LENGTH = 2;
 /** 同じ色のランとみなす ΔE。本体ランをまとめるのに使う。 */
 const DEFAULT_CLUSTER_DELTA_E = 18;
 
+/** 本体クラスタでの明度の重み。1 なら素の CIE76。 */
+const DEFAULT_BODY_LIGHTNESS_WEIGHT = 1;
+
 function medianLab(samples: readonly ProfileSample[]): LabColor {
   const pick = (select: (sample: ProfileSample) => number): number => {
     const values = samples.map(select).sort((a, b) => a - b);
@@ -110,22 +113,39 @@ export function splitRuns(
 }
 
 /**
+ * 本体クラスタの距離。明度の重みを下げた CIE76。
+ *
+ * 抵抗器は円筒なので、同じ地の色でも端に向かって暗くなる。実写 39 枚では
+ * 本体ランの L\* が中央値で 15、最大 25 ばらついていた。素の CIE76 だと
+ * その陰の部分が別クラスタになり、バンドとして数えられて本数が狂う。
+ * 色相・彩度は陰でもほとんど変わらないので、明度だけ効きを弱める。
+ */
+function bodyDistance(a: LabColor, b: LabColor, lightnessWeight: number): number {
+  return Math.hypot((a.l - b.l) * lightnessWeight, a.a - b.a, a.b - b.b);
+}
+
+/**
  * ランの中から本体（背景ではなく抵抗器の地の色）を特定する。
  *
  * 本体は ROI の中で最も広い面積を占めるので、色が近いラン同士をまとめて
  * 合計幅が最大のグループを本体とする。基準色テーブルには依存しない。
+ *
+ * @param lightnessWeight 本体クラスタでの明度の重み。1 で従来どおり。
  */
 export function identifyBody(
   runs: readonly ColorRun[],
   clusterDeltaE = DEFAULT_CLUSTER_DELTA_E,
+  lightnessWeight = DEFAULT_BODY_LIGHTNESS_WEIGHT,
 ): BodyIdentification | null {
   if (runs.length === 0) return null;
 
   // 近い色のラン同士をまとめる（貪欲クラスタリング）
   const clusters: number[][] = [];
   runs.forEach((run, index) => {
-    const match = clusters.find((cluster) =>
-      deltaE76(run.lab, (runs[cluster[0] as number] as ColorRun).lab) <= clusterDeltaE,
+    const match = clusters.find(
+      (cluster) =>
+        bodyDistance(run.lab, (runs[cluster[0] as number] as ColorRun).lab, lightnessWeight) <=
+        clusterDeltaE,
     );
     if (match === undefined) clusters.push([index]);
     else match.push(index);
@@ -150,11 +170,19 @@ export function identifyBody(
       }),
     );
 
-  const body = clusters.reduce((best, cluster) => {
+  const seed = clusters.reduce((best, cluster) => {
     const gain = widthOf(cluster) - widthOf(best);
     if (gain !== 0) return gain > 0 ? cluster : best;
     return distanceToMiddle(cluster) < distanceToMiddle(best) ? cluster : best;
   });
+
+  // 代表色を決めてから取り込み直す。貪欲クラスタリングはクラスタの先頭と
+  // 比べるので、明るい端から暗い端へ段階的に変わる本体を取りこぼす。
+  // 代表色と比べれば、どちらの端からでも同じ結果になる。
+  const seedLab = medianLab(seed.map((index) => ({ x: 0, lab: (runs[index] as ColorRun).lab })));
+  const body = runs
+    .map((_, index) => index)
+    .filter((index) => bodyDistance((runs[index] as ColorRun).lab, seedLab, lightnessWeight) <= clusterDeltaE);
 
   const first = runs[body[0] as number] as ColorRun;
   const last = runs[body[body.length - 1] as number] as ColorRun;

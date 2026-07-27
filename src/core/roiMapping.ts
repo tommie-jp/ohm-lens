@@ -110,6 +110,33 @@ export interface ColumnRange {
 }
 
 /**
+ * 検出した本体が ROI のどの列を占めるかを返す。
+ *
+ * ROI はパディングぶんだけ本体より広いので、その内訳はここで確定できる。
+ * 本体の位置をプロファイルから推定し直すと、背景を本体に含めたり
+ * 逆に端のバンドを切り落としたりする。検出側が既に答えを持っているのだから、
+ * それを事前情報として渡すほうが確実。
+ *
+ * @param margin 本体長に対する外側への余白。バンドは丸まった肩に載って
+ *   いることがあるので、少しだけ外を含める。
+ */
+export function bodyColumns(
+  box: OrientedBox,
+  options: RectifyOptions,
+  margin = 0,
+): ColumnRange {
+  const geometry = roiGeometry(box, options);
+  const bodyWidth = box.length * geometry.scale;
+  const center = geometry.width / 2;
+  const half = bodyWidth * (0.5 + margin);
+
+  return {
+    start: Math.max(0, center - half),
+    end: Math.min(geometry.width, center + half),
+  };
+}
+
+/**
  * バンド 1 本が元画像で占める四隅を返す。
  * 順序は左上 → 右上 → 右下 → 左下（多角形として閉じられる）。
  */

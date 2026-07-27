@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   bandCorners,
+  bodyColumns,
   imageToRoi,
   labelAnchor,
   roiGeometry,
@@ -194,5 +195,58 @@ describe('labelAnchor', () => {
 
     // Assert: 法線方向にちょうど offset ぶん離れている
     expect(Math.hypot(anchor.x - onEdge.x, anchor.y - onEdge.y)).toBeCloseTo(30, 6);
+  });
+});
+
+describe('bodyColumns', () => {
+  it('パディングなしなら ROI 全体が本体', () => {
+    // Arrange / Act
+    const columns = bodyColumns(BOX, {});
+
+    // Assert
+    expect(columns.start).toBe(0);
+    expect(columns.end).toBe(120);
+  });
+
+  it('パディングぶんだけ内側に入った範囲を返す', () => {
+    // Arrange: padding 0.25 → ROI 幅は 120 * 1.5 = 180、本体は中央の 120
+    // Act
+    const columns = bodyColumns(BOX, { padding: 0.25 });
+
+    // Assert
+    expect(columns.start).toBeCloseTo(30, 0);
+    expect(columns.end).toBeCloseTo(150, 0);
+  });
+
+  it('targetHeight で拡縮しても ROI 座標として整合する', () => {
+    // Arrange
+    const options = { padding: 0.25, targetHeight: 40 };
+    const geometry = roiGeometry(BOX, options);
+
+    // Act
+    const columns = bodyColumns(BOX, options);
+
+    // Assert: 本体は ROI の中央 2/3（1 / 1.5）を占める
+    expect(columns.start / geometry.width).toBeCloseTo(1 / 6, 2);
+    expect(columns.end / geometry.width).toBeCloseTo(5 / 6, 2);
+  });
+
+  it('余白を指定すると本体の外側へ広がる（バンドは肩に載るため）', () => {
+    // Arrange / Act
+    const columns = bodyColumns(BOX, { padding: 0.25 }, 0.1);
+
+    // Assert: 本体長 120 の 10% ずつ外へ
+    expect(columns.start).toBeCloseTo(18, 0);
+    expect(columns.end).toBeCloseTo(162, 0);
+  });
+
+  it('余白を広げても ROI の外には出ない', () => {
+    // Arrange / Act
+    const columns = bodyColumns(BOX, { padding: 0.05 }, 0.5);
+    const geometry = roiGeometry(BOX, { padding: 0.05 });
+
+    // Assert
+    expect(columns.start).toBe(0);
+    expect(columns.end).toBe(geometry.width);
   });
 });

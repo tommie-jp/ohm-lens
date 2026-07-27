@@ -10,6 +10,11 @@ export interface SegmentOptions {
   readonly minBandWidth?: number;
   /** 同じ色のランとみなす ΔE（本体ランをまとめるのに使う） */
   readonly clusterDeltaE?: number;
+  /**
+   * 本体クラスタでの明度の重み。1 で素の CIE76。
+   * 円筒の陰影で暗くなった本体を本体として拾うために下げる。
+   */
+  readonly bodyLightnessWeight?: number;
   /** バンド色の基準テーブル。較正結果を差し替えられる。 */
   readonly palette?: Palette;
 }
@@ -33,7 +38,7 @@ export function bandRuns(
     ...(options.minBandWidth === undefined ? {} : { minRunLength: options.minBandWidth }),
   });
 
-  const body = identifyBody(runs, options.clusterDeltaE);
+  const body = identifyBody(runs, options.clusterDeltaE, options.bodyLightnessWeight);
   if (body === null) return [];
 
   const bodyRuns = new Set(body.runIndices);

@@ -4,9 +4,15 @@ import { describe, expect, it } from 'vitest';
 import { extractProfile } from '../../src/core/bands/profile.js';
 import { locateResistor } from '../../src/core/locate.js';
 import { rectify } from '../../src/core/rectify.js';
+import { bodyColumns } from '../../src/core/roiMapping.js';
 import { identifyBody, splitRuns } from '../../src/core/bands/runs.js';
 import { alignRunsToBands } from '../../src/core/bands/align.js';
-import { expectedSequences } from '../../src/core/learning.js';
+import {
+  addObservations,
+  expectedSequences,
+  paletteOverrides,
+  type Observations,
+} from '../../src/core/learning.js';
 import { buildBodyAnchorAdaptation } from '../../src/core/color/anchor.js';
 import { adaptToAnchor } from '../../src/core/color/whiteBalance.js';
 import { labToRgb } from '../../src/core/color/colorSpace.js';
@@ -33,6 +39,8 @@ const MAX_ALIGN_COST = 25;
 
 const ROI_HEIGHT = 40;
 const ROI_PADDING = 0.28;
+const BODY_MARGIN = 0.18;
+const BODY_LIGHTNESS_WEIGHT = 0.6;
 const EDGE_DELTA_E = 9;
 const CLUSTER_DELTA_E = 18;
 const MIN_RUN_LENGTH = 3;
@@ -65,7 +73,7 @@ interface Run {
 /** 本体ランを除いた「バンド候補」のランを取り出す（分類はしない）。 */
 function extractRuns(profile: readonly ProfileSample[]): Run[] {
   const runs = splitRuns(profile, { edgeDeltaE: EDGE_DELTA_E, minRunLength: MIN_RUN_LENGTH });
-  const body = identifyBody(runs, CLUSTER_DELTA_E);
+  const body = identifyBody(runs, CLUSTER_DELTA_E, BODY_LIGHTNESS_WEIGHT);
   if (body === null) return [];
 
   const bodyRuns = new Set(body.runIndices);
@@ -98,8 +106,11 @@ describe.skipIf(!hasSamples())('基準色の較正', () => {
       const box = locateResistor(image);
       if (box === null) continue;
 
-      const roi = rectify(image, box, { padding: ROI_PADDING, targetHeight: ROI_HEIGHT });
-      const raw = extractProfile(roi);
+      const rectifyOptions = { padding: ROI_PADDING, targetHeight: ROI_HEIGHT };
+      const roi = rectify(image, box, rectifyOptions);
+      // 本体の位置は検出結果から決める。較正は取りこぼしを避けたいので広めに取る
+      const body = bodyColumns(box, rectifyOptions, BODY_MARGIN);
+      const raw = extractProfile(roi).slice(Math.round(body.start), Math.round(body.end));
       const { adaptation } = buildBodyAnchorAdaptation(raw);
       const profile = raw.map((s) => ({ x: s.x, lab: adaptToAnchor(s.lab, adaptation) }));
       const runs = extractRuns(profile);
@@ -159,11 +170,13 @@ describe.skipIf(!hasSamples())('基準色の較正', () => {
       );
     }
 
-    // 学習したパレットを書き出す（データが取れた色だけ）
-    const learned: Partial<Record<BandColor, LabColor>> = {};
+    // 学習したパレットを書き出す。件数と既定値からのずれの判定は
+    // GUI の学習と同じ paletteOverrides に任せる（二重管理を避ける）
+    let observations: Observations = {};
     for (const [color, samples] of observed) {
-      if (samples.length >= MIN_SAMPLES_PER_COLOR) learned[color] = medianLab(samples);
+      observations = addObservations(observations, samples.map((lab) => ({ color, lab })));
     }
+    const learned = paletteOverrides(observations, MIN_SAMPLES_PER_COLOR);
     writeFileSync(
       PALETTE_PATH,
       JSON.stringify({ generatedFrom: `${matched} images`, colors: learned }, null, 2) + '\n',

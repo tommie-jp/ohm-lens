@@ -1,7 +1,8 @@
 import sharp from 'sharp';
-import { analyzeRoi } from '../core/pipeline.js';
-import { locateResistor } from '../core/locate.js';
+import { analyzeRoi, type AnalyzeOptions } from '../core/pipeline.js';
+import { locateResistor, type OrientedBox } from '../core/locate.js';
 import { rectify, type RectifyOptions } from '../core/rectify.js';
+import { bodyColumns } from '../core/roiMapping.js';
 import { formatOhms } from '../core/format.js';
 import { jointReadResistor } from '../core/value/jointDecode.js';
 import { DEFAULT_PALETTE, type Palette } from '../core/color/palette.js';
@@ -26,8 +27,42 @@ import { buildAnnotationSvg } from './render.js';
  */
 const ROI_PADDING = 0.28;
 
+/**
+ * 本体の外側をどれだけバンド探索に含めるか（本体長に対する割合）。
+ *
+ * 0（検出した本体そのもの）が最良だった。外へ広げるほど落ちる
+ * （0 → 19 枚、0.03 → 17 枚、0.06 → 9 枚）。ROI の余白 0.28 で既に
+ * 肩まで入っているため、これ以上外を見ると背景がバンドになる。
+ */
+const BODY_MARGIN = 0;
+
+/**
+ * 本体クラスタでの明度の重み。
+ *
+ * 円筒の陰影で本体の L\* は中央値 15・最大 25 ばらつく。素の CIE76 だと
+ * 陰の部分が別クラスタになりバンドとして数えられる。実測では
+ * 1 → 17 枚、0.7 → 19 枚、0.5 → 18 枚、0.2 → 8 枚。
+ */
+const BODY_LIGHTNESS_WEIGHT = 0.6;
+
 /** GUI・テストハーネスと揃えた ROI の切り出し条件。 */
 export const ROI_OPTIONS: RectifyOptions = { padding: ROI_PADDING, targetHeight: 40 };
+
+/**
+ * ROI の解析条件。検出結果から本体の位置を渡すのが要点。
+ *
+ * `bodyExtent` によるプロファイルからの推定は 39 枚中 25 枚で外れていた
+ * （広すぎ 10・狭すぎ 15）。広すぎれば背景がバンドになり、狭すぎれば端の
+ * バンドが消える。検出側が本体の位置を持っているので、そちらを信じる。
+ *
+ * デバッグツールと本番で条件がずれないよう、ここだけを見れば済むようにする。
+ */
+export function analyzeOptions(box: OrientedBox, palette: Palette): AnalyzeOptions {
+  return {
+    segment: { palette, bodyLightnessWeight: BODY_LIGHTNESS_WEIGHT },
+    bodyRange: bodyColumns(box, ROI_OPTIONS, BODY_MARGIN),
+  };
+}
 
 /** 解析前に縮小する長辺の画素数。実機の解析と条件を揃える。 */
 const DECODE_MAX_SIZE = 800;
@@ -103,7 +138,7 @@ export async function annotateImage(
   }
 
   const roi = rectify(image, box, ROI_OPTIONS);
-  const result = analyzeRoi(roi, { segment: { palette } });
+  const result = analyzeRoi(roi, analyzeOptions(box, palette));
   // 役割つきの解釈が要るので、同じランで joint デコードを取り直す
   const joint = jointReadResistor(
     result.runs.map((run) => ({ lab: run.lab, start: run.start, end: run.end })),

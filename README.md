@@ -7,7 +7,7 @@ Author: [tommie.jp](https://tommie.jp) ([@tommie-jp](https://github.com/tommie-j
 - **当面の URL**: `https://ohmlens.tommie.jp`
 - **方針**: ブラウザ完結（クライアントサイド推論）、サーバ不要
 - **Status**: Phase 0 実装中（Step 0-1〜0-6 完了、実画像での較正 Step 0-7 が残り。
-  サンプル 39 枚で検出 39/39・値の一致 16/39）
+  サンプル 39 枚で検出 39/39・値の一致 19/39）
 
 ## 開発
 
@@ -96,6 +96,17 @@ npx tsx scripts/dbgLocate.ts ../sample/07-10ohm-on-carpet.jpg
 
 背景色・前景の割合・候補ごとの採点（細長さ・面積比・充填率）と却下理由を
 出力し、前景マスクを `sample-detect/mask/` に PNG で書き出します。
+
+色帯の切り出し（ラン分割）を疑うときは、こちらを使います。
+
+```bash
+npx tsx scripts/dbgRuns.ts ../sample/35-1Mohm.jpg   # 1 枚を詳しく
+npx tsx scripts/dbgRuns.ts ../sample/*.jpg          # ラン数の分布だけ
+```
+
+ラン 1 本ずつの Lab・幅・本体色との差を出力し、ROI とラン境界を重ねた帯画像を
+`sample-detect/runs/` に書き出します。**ランが 3 本に収まれば 88% 当たり、
+6 本以上になるとほぼ当たりません** — まずここを見ます。
 
 ## 値で学習（推奨の較正フロー）
 
@@ -193,6 +204,7 @@ getUserMedia
 | [docs/04-検出デバッグ表示計画.md](docs/04-検出デバッグ表示計画.md) | 検出デバッグ表示計画（赤い回転ボックス + バンド色名の焼き込み） |
 | [docs/05-doDetect計画.md](docs/05-doDetect計画.md) | doDetect.sh 計画（バッチ検出デバッグ、バンドの意味ラベル付き） |
 | [docs/06-検出精度の改善.md](docs/06-検出精度の改善.md) | 検出（赤い四角形）の精度改善（影の除外・開処理・成分の形での選択、実測値） |
+| [docs/07-色帯読み取りの改善.md](docs/07-色帯読み取りの改善.md) | 色帯読み取りの改善（本体範囲の事前情報化・陰影対策・金の誤学習ガード） |
 | [docs/04-色判定方式の検討.md](docs/04-色判定方式の検討.md) | 色判定方式の検討（RGB 距離・指標多数決の不採用理由、E系列候補照合の提案） |
 | `diagrams/` | ブロック図・状態遷移図（PlantUML ソースと生成 PNG） |
 | [CHANGELOG.md](CHANGELOG.md) | 変更履歴 |
