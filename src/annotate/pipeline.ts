@@ -16,8 +16,18 @@ import { buildAnnotationSvg } from './render.js';
  * デバッグツールなので、失敗が消えてしまわないことが大事。
  */
 
+/**
+ * ROI の余白。検出した本体範囲の外側をどれだけ含めるか。
+ *
+ * 検出ボックスは本体にぴったり張り付くので、そのまま切ると端のバンドが
+ * 半分欠ける（バンドは丸まった肩に載っている）。39 枚での実測では
+ * 0.22〜0.32 の範囲が頭打ちで一致 14〜16 枚、その外側は急に落ちる。
+ * 平坦な区間の真ん中を採る。
+ */
+const ROI_PADDING = 0.28;
+
 /** GUI・テストハーネスと揃えた ROI の切り出し条件。 */
-export const ROI_OPTIONS: RectifyOptions = { padding: 0.06, targetHeight: 40 };
+export const ROI_OPTIONS: RectifyOptions = { padding: ROI_PADDING, targetHeight: 40 };
 
 /** 解析前に縮小する長辺の画素数。実機の解析と条件を揃える。 */
 const DECODE_MAX_SIZE = 800;

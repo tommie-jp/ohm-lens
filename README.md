@@ -6,7 +6,8 @@ Author: [tommie.jp](https://tommie.jp) ([@tommie-jp](https://github.com/tommie-j
 
 - **当面の URL**: `https://ohmlens.tommie.jp`
 - **方針**: ブラウザ完結（クライアントサイド推論）、サーバ不要
-- **Status**: Phase 0 実装中（Step 0-1〜0-6 完了、実画像での較正 Step 0-7 が残り）
+- **Status**: Phase 0 実装中（Step 0-1〜0-6 完了、実画像での較正 Step 0-7 が残り。
+  サンプル 39 枚で検出 39/39・値の一致 16/39）
 
 ## 開発
 
@@ -84,7 +85,17 @@ HEIC のデコーダ（libheif の WASM、約 3MB）は Chrome / Firefox が HEI
 ときは間違った解釈がそのまま出ます — それを見るための道具です。
 
 `summary.txt` に 1 行ずつの一覧（期待値・検出値・角度・長さ・太さ・比・
-バンド列）が出ます。
+バンド列）が出ます。「比」は長さ ÷ 太さで、1/4W の炭素皮膜抵抗なら 3.0〜3.5
+に落ち着きます。ここが 2 を切っていたら検出が太すぎます。
+
+検出そのものを疑うときは、前景マスクと候補の採点を見ます。
+
+```bash
+npx tsx scripts/dbgLocate.ts ../sample/07-10ohm-on-carpet.jpg
+```
+
+背景色・前景の割合・候補ごとの採点（細長さ・面積比・充填率）と却下理由を
+出力し、前景マスクを `sample-detect/mask/` に PNG で書き出します。
 
 ## 値で学習（推奨の較正フロー）
 
@@ -181,6 +192,7 @@ getUserMedia
 | [docs/03-スマホ対応計画.md](docs/03-スマホ対応計画.md) | スマホ対応計画（M0 実機計測 → レイアウト → 性能 → プレビュー） |
 | [docs/04-検出デバッグ表示計画.md](docs/04-検出デバッグ表示計画.md) | 検出デバッグ表示計画（赤い回転ボックス + バンド色名の焼き込み） |
 | [docs/05-doDetect計画.md](docs/05-doDetect計画.md) | doDetect.sh 計画（バッチ検出デバッグ、バンドの意味ラベル付き） |
+| [docs/06-検出精度の改善.md](docs/06-検出精度の改善.md) | 検出（赤い四角形）の精度改善（影の除外・開処理・成分の形での選択、実測値） |
 | [docs/04-色判定方式の検討.md](docs/04-色判定方式の検討.md) | 色判定方式の検討（RGB 距離・指標多数決の不採用理由、E系列候補照合の提案） |
 | `diagrams/` | ブロック図・状態遷移図（PlantUML ソースと生成 PNG） |
 | [CHANGELOG.md](CHANGELOG.md) | 変更履歴 |

@@ -32,7 +32,7 @@ const LABELS_PATH = join(import.meta.dirname, '../../../sample/labels.json');
 const MAX_ALIGN_COST = 25;
 
 const ROI_HEIGHT = 40;
-const ROI_PADDING = 0.06;
+const ROI_PADDING = 0.28;
 const EDGE_DELTA_E = 9;
 const CLUSTER_DELTA_E = 18;
 const MIN_RUN_LENGTH = 3;
