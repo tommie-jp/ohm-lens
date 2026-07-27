@@ -22,6 +22,9 @@ runs/
 *.onnx
 *.pt
 
+# 収集した参考写真（第三者の CC 素材。取捨選択とライセンス判断が済むまで追跡しない）
+sample/
+
 # テスト・カバレッジ
 coverage/
 .nyc_output/
