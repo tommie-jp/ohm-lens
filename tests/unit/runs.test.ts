@@ -278,3 +278,67 @@ describe('identifyBody — 代表色での取り込み直し', () => {
     expect(body?.runIndices).toEqual([0, 2, 4]);
   });
 });
+
+describe('identifyBody — 金・銀のように本体と色相が同じバンド', () => {
+  /** 明度だけを落とす（金は本体ベージュと同色相で暗い）。 */
+  const darker = (rgb: Rgb, factor: number): Rgb =>
+    [
+      Math.round(rgb[0] * factor),
+      Math.round(rgb[1] * factor),
+      Math.round(rgb[2] * factor),
+    ] as [number, number, number];
+
+  it('前後より暗く凹んだランは本体に取り込まない（金バンド）', () => {
+    // Arrange: ベージュ本体の中に、色相そのままで暗い帯が 1 本
+    const gold = darker(BODY_SRGB.beige, 0.74);
+    const runs = splitRuns(
+      profileOf([
+        [BODY_SRGB.beige, 8],
+        [gold, 4],
+        [BODY_SRGB.beige, 8],
+      ]),
+    );
+
+    // Act
+    const body = identifyBody(runs, undefined, 0.6);
+
+    // Assert: 金は本体から外れてバンド候補として残る
+    expect(body?.runIndices).toEqual([0, 2]);
+  });
+
+  it('前後より明るく盛り上がったランも本体に取り込まない（銀バンド）', () => {
+    // Arrange
+    const silver = darker(BODY_SRGB.beige, 1.22);
+    const runs = splitRuns(
+      profileOf([
+        [BODY_SRGB.beige, 8],
+        [silver, 4],
+        [BODY_SRGB.beige, 8],
+      ]),
+    );
+
+    // Act
+    const body = identifyBody(runs, undefined, 0.6);
+
+    // Assert
+    expect(body?.runIndices).toEqual([0, 2]);
+  });
+
+  it('端から端へ単調に暗くなる陰影は本体のまま', () => {
+    // Arrange: 円筒の陰影。凹凸ではなく片側へ向かって暗くなるだけ
+    const runs = splitRuns(
+      profileOf([
+        [BODY_SRGB.beige, 6],
+        [darker(BODY_SRGB.beige, 0.88), 6],
+        [darker(BODY_SRGB.beige, 0.76), 6],
+        [darker(BODY_SRGB.beige, 0.66), 6],
+      ]),
+    );
+
+    // Act
+    const body = identifyBody(runs, undefined, 0.6);
+
+    // Assert: 分割された本数によらず、全部が本体
+    expect(body?.runIndices).toHaveLength(runs.length);
+  });
+});

@@ -56,6 +56,15 @@ const DEFAULT_CLUSTER_DELTA_E = 18;
 /** 本体クラスタでの明度の重み。1 なら素の CIE76。 */
 const DEFAULT_BODY_LIGHTNESS_WEIGHT = 1;
 
+/**
+ * 前後のランに対してこれ以上明度が凹んで（盛り上がって）いれば、
+ * 陰影ではなくバンドとみなす。
+ */
+const LIGHTNESS_EXTREMUM_MARGIN = 12;
+
+/** 凹凸のあるランを本体に取り込むときの、しきい値の絞り込み。 */
+const EXTREMUM_CLUSTER_TOLERANCE = 0.85;
+
 function medianLab(samples: readonly ProfileSample[]): LabColor {
   const pick = (select: (sample: ProfileSample) => number): number => {
     const values = samples.map(select).sort((a, b) => a - b);
@@ -124,6 +133,46 @@ function bodyDistance(a: LabColor, b: LabColor, lightnessWeight: number): number
   return Math.hypot((a.l - b.l) * lightnessWeight, a.a - b.a, a.b - b.b);
 }
 
+/** 色度（a\*b\*）だけの距離。明度を無視して「同じ色みか」を見る。 */
+function chromaDistance(a: LabColor, b: LabColor): number {
+  return Math.hypot(a.a - b.a, a.b - b.b);
+}
+
+/**
+ * 本体色の連なりの中で、明度だけが凹んでいる（盛り上がっている）ランか。
+ *
+ * 金・銀のバンドは本体と**色相が同じで明度だけ違う**。円筒の陰影も同じなので、
+ * 色だけでは分けられない（02 では本体 L68 a13 b22 に対し金 L51 a14 b20）。
+ * 違いは形で、陰影は端へ向かって単調に変わるのに対し、バンドは局所的に凹む。
+ *
+ * ただし**前後が本体色であること**を条件にする。これが無いと、色バンドに
+ * 挟まれた本体（茶・本体・茶）まで「盛り上がり」とみなして外してしまう。
+ */
+function isBodyLightnessExtremum(
+  runs: readonly ColorRun[],
+  index: number,
+  seedLab: LabColor,
+  clusterDeltaE: number,
+): boolean {
+  const previous = runs[index - 1];
+  const next = runs[index + 1];
+  // 端のランは前後が揃わないので判定しない（陰影として扱う）
+  if (previous === undefined || next === undefined) return false;
+  if (
+    chromaDistance(previous.lab, seedLab) > clusterDeltaE ||
+    chromaDistance(next.lab, seedLab) > clusterDeltaE
+  ) {
+    return false;
+  }
+
+  const fromPrevious = (runs[index] as ColorRun).lab.l - previous.lab.l;
+  const fromNext = (runs[index] as ColorRun).lab.l - next.lab.l;
+  return (
+    (fromPrevious < -LIGHTNESS_EXTREMUM_MARGIN && fromNext < -LIGHTNESS_EXTREMUM_MARGIN) ||
+    (fromPrevious > LIGHTNESS_EXTREMUM_MARGIN && fromNext > LIGHTNESS_EXTREMUM_MARGIN)
+  );
+}
+
 /**
  * ランの中から本体（背景ではなく抵抗器の地の色）を特定する。
  *
@@ -182,7 +231,14 @@ export function identifyBody(
   const seedLab = medianLab(seed.map((index) => ({ x: 0, lab: (runs[index] as ColorRun).lab })));
   const body = runs
     .map((_, index) => index)
-    .filter((index) => bodyDistance((runs[index] as ColorRun).lab, seedLab, lightnessWeight) <= clusterDeltaE);
+    .filter((index) => {
+      // 明度が局所的に凹んでいるランは陰影ではないので、明度の緩和を効かせない
+      const extremum = isBodyLightnessExtremum(runs, index, seedLab, clusterDeltaE);
+      return (
+        bodyDistance((runs[index] as ColorRun).lab, seedLab, extremum ? 1 : lightnessWeight) <=
+        clusterDeltaE * (extremum ? EXTREMUM_CLUSTER_TOLERANCE : 1)
+      );
+    });
 
   const first = runs[body[0] as number] as ColorRun;
   const last = runs[body[body.length - 1] as number] as ColorRun;
