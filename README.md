@@ -27,6 +27,26 @@ npm run typecheck  # tsc --noEmit
 - **合成サンプル** — 画像もカメラも無い環境で動作確認する用
 
 カメラは HTTPS か localhost でのみ使えます（secure context 必須）。
+**スマホの実機で試す場合は `./doStart.sh` を使ってください**（下記）。
+
+## スマホから試す（Tailscale）
+
+```bash
+./doStart.sh            # https://<machine>.<tailnet>.ts.net:10000/ で公開
+./doStart.sh 8443       # ポートを変える場合
+VITE_PORT=5174 ./doStart.sh   # ローカル側のポートを変える場合
+```
+
+同じ tailnet の端末からこの URL を開けます。`tailscale serve` が Let's Encrypt
+の正規証明書で HTTPS を終端するので、**スマホのカメラがそのまま使えます**
+（素の HTTP で Tailscale IP を叩くと secure context にならず、カメラは
+ブロックされます）。
+
+スクリプトの挙動:
+
+- 既に使われている `tailscale serve` のポートは奪わない（起動前に確認する）
+- Ctrl+C で、このスクリプトが張った分**だけ**を取り消す。他の serve 設定は残す
+- Vite はプロセスグループごと停止する（`npm run dev` の孫プロセスが残らないよう）
 
 ## 対応する画像形式
 

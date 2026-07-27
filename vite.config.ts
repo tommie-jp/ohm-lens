@@ -34,6 +34,12 @@ function servePalette(): Plugin {
 export default defineConfig({
   root: 'src/debug',
   plugins: [servePalette()],
+  server: {
+    // tailscale serve 経由だと Host ヘッダが <machine>.<tailnet>.ts.net になる。
+    // Vite は既定で未知の Host を弾くので、tailnet のドメインを許可しておく
+    // （doStart.sh で HTTPS 終端して中継する構成）。
+    allowedHosts: ['.ts.net'],
+  },
   build: {
     outDir: '../../dist',
     emptyOutDir: true,
