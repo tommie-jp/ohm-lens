@@ -66,8 +66,15 @@ const LIGHTING_CHROMA_TOLERANCE = 9;
  */
 const LIGHTING_MAX_LIGHTNESS_DIFF = 24;
 
-/** 本体とみなす太さの下限（最大太さに対する割合）。リード線を落とすため。 */
-const BODY_THICKNESS_RATIO = 0.45;
+/**
+ * 本体とみなす太さの下限（最大太さに対する割合）。リード線を落とすため。
+ *
+ * **1 通りに決まらない**ので複数試し、`scoreComponent` の採点が最も高い
+ * 切り方を採る。高いほうが良い画像（01: 暗い布の上でバンドが抜け、緩めると
+ * 隣の塊まで拾う）と、低いほうが良い画像（03: 地の色が背景と同じで、
+ * バンドの間が薄い影だけになる）が両方ある。
+ */
+const BODY_THICKNESS_RATIOS = [0.5, 0.42, 0.35] as const;
 
 /** 本体の途中で許す途切れの長さ（本体の太さに対する割合）。 */
 const BODY_GAP_RATIO = 0.9;
@@ -83,6 +90,12 @@ const BODY_THICKNESS_TOLERANCE = 0.6;
  * 影やハイライトが 1 点混じっただけで太さが跳ねないよう、最大値は使わない。
  */
 const THICKNESS_PERCENTILE = 0.99;
+
+/**
+ * 本体の太さを代表させる分位点（区間内の断面のうち）。
+ * 中央値だと、地の色が背景に溶けて抜けた薄い断面に引きずられる。
+ */
+const BODY_THICKNESS_PERCENTILE = 0.7;
 
 /** 処理を軽くするための最大解像度（長辺）。これを超える画像は間引く。 */
 const MAX_ANALYSIS_SIZE = 400;
@@ -277,22 +290,61 @@ function open(mask: Uint8Array, cols: number, rows: number, radius: number): Uin
   return sweep(eroded, cols, rows, radius, 1);
 }
 
-/** 4 近傍の連結成分をすべて求め、大きい順に返す。 */
-function findComponents(mask: Uint8Array, cols: number, rows: number): number[][] {
+
+/**
+ * 成分をまとめるための膨張半径（格子の短辺に対する割合）。
+ *
+ * 抵抗器はバンドの色が背景と近いとマスクが**分断される**。
+ * 暗い布の上の 01（茶・黒バンドが背景と同じ明るさ）、白い紙の上の 03
+ * （本体の地色が背景と同じ明るさで、バンドだけが島になる）、
+ * カーペットの 07（赤い本体が茶色の毛と近い）がこれで、
+ * 一番大きな島だけを見ると本体の一部しか囲めない。
+ *
+ * 膨らませてから連結を取り、**元の画素をそのグループに集める**。
+ * 形の評価は元の画素で行うので、太さが水増しされることはない。
+ */
+const GROUP_RADIUS_RATIO = 0.03;
+
+/**
+ * 近くにある成分をまとめる。膨張したマスクで連結を取り、元の画素を配る。
+ * 返すのは「まとまりごとの、元マスクの画素の添字」。
+ */
+function groupComponents(
+  mask: Uint8Array,
+  cols: number,
+  rows: number,
+  radius: number,
+): number[][] {
+  if (radius < 1) return findComponents(mask, cols, rows);
+
+  const dilated = sweep(mask, cols, rows, radius, 1);
+  const groups = new Map<number, number[]>();
+  const labels = labelComponents(dilated, cols, rows);
+
+  for (let index = 0; index < mask.length; index += 1) {
+    if (mask[index] === 0) continue;
+    const label = labels[index] as number;
+    const members = groups.get(label);
+    if (members === undefined) groups.set(label, [index]);
+    else members.push(index);
+  }
+
+  return [...groups.values()].sort((a, b) => b.length - a.length).slice(0, MAX_COMPONENTS_SCORED);
+}
+
+/** 4 近傍で連結成分にラベルを振る。背景は -1。 */
+function labelComponents(mask: Uint8Array, cols: number, rows: number): Int32Array {
   const labels = new Int32Array(mask.length).fill(-1);
   const stack: number[] = [];
-  const components: number[][] = [];
 
   for (let start = 0; start < mask.length; start += 1) {
     if (mask[start] === 0 || labels[start] !== -1) continue;
 
-    const component: number[] = [];
     labels[start] = start;
     stack.push(start);
 
     while (stack.length > 0) {
       const index = stack.pop() as number;
-      component.push(index);
       const x = index % cols;
       const y = (index - x) / cols;
 
@@ -308,10 +360,24 @@ function findComponents(mask: Uint8Array, cols: number, rows: number): number[][
         stack.push(neighbour);
       }
     }
-    components.push(component);
   }
+  return labels;
+}
 
-  return components.sort((a, b) => b.length - a.length).slice(0, MAX_COMPONENTS_SCORED);
+/** 4 近傍の連結成分をすべて求め、大きい順に返す。 */
+function findComponents(mask: Uint8Array, cols: number, rows: number): number[][] {
+  const labels = labelComponents(mask, cols, rows);
+  const components = new Map<number, number[]>();
+  for (let index = 0; index < mask.length; index += 1) {
+    if (mask[index] === 0) continue;
+    const label = labels[index] as number;
+    const members = components.get(label);
+    if (members === undefined) components.set(label, [index]);
+    else members.push(index);
+  }
+  return [...components.values()]
+    .sort((a, b) => b.length - a.length)
+    .slice(0, MAX_COMPONENTS_SCORED);
 }
 
 interface Point {
@@ -406,6 +472,7 @@ function sliceOf(values: readonly number[]): Slice {
 function bodyExtent(
   projected: readonly { along: number; across: number }[],
   step: number,
+  thicknessRatio: number,
 ): BodyMetrics | null {
   let minAlong = Number.POSITIVE_INFINITY;
   let maxAlong = Number.NEGATIVE_INFINITY;
@@ -428,58 +495,74 @@ function bodyExtent(
   const maxThickness = Math.max(...slices.map((slice) => slice.thickness));
   if (maxThickness <= 0) return null;
 
-  const threshold = maxThickness * BODY_THICKNESS_RATIO;
+  const threshold = maxThickness * thicknessRatio;
 
   // 白帯が白背景に溶けて穴が開くことがあるので、短い途切れは跨ぐ。
-  // ただし跨ぐ相手は「同じ太さで同じ中心線に乗っている」ときだけ。
-  // これが無いと、リード線の先の反射やムラまで一続きの本体にしてしまう。
   const maxGap = Math.max(2, Math.round((maxThickness * BODY_GAP_RATIO) / binWidth));
 
-  const continues = (from: Slice, to: Slice): boolean =>
-    Math.abs(to.center - from.center) < from.thickness * BODY_CENTER_TOLERANCE &&
-    to.thickness > from.thickness * BODY_THICKNESS_TOLERANCE &&
-    to.thickness < from.thickness / BODY_THICKNESS_TOLERANCE;
+  /**
+   * 同じ本体の続きとみなせるか。
+   *
+   * 抵抗器の中心線はまっすぐで太さも揃っているので、中心が動いたり太さが
+   * 大きく変わったりしたらそこは別の物体。これが無いとリード線の先の反射や
+   * 背景のムラまで一続きの本体にしてしまう。
+   *
+   * 比べる相手は直前のスライスではなく**区間で最も太いスライス**。
+   * 本体はバンドの間で細くなることがあり（03 では地の色が背景と同じで、
+   * バンドの間が薄い影だけになる）、直前と比べると太さ比で弾かれてしまう。
+   */
+  const onSameAxis = (reference: Slice, to: Slice): boolean =>
+    Math.abs(to.center - reference.center) < reference.thickness * BODY_CENTER_TOLERANCE;
+
+  const continues = (reference: Slice, to: Slice, bridged: boolean): boolean =>
+    onSameAxis(reference, to) &&
+    // 途切れを跨ぐときだけ太さも見る。地続きなら本体の中の細い部分でありうる
+    (!bridged || to.thickness > reference.thickness * BODY_THICKNESS_TOLERANCE);
 
   let bestStart = -1;
   let bestEnd = -1;
-  let runStart = -1;
-  let lastBody = -1;
-  for (let bin = 0; bin <= binCount; bin += 1) {
-    const slice = bin < binCount ? (slices[bin] as Slice) : null;
-    const isBody = slice !== null && slice.thickness >= threshold;
+  let current: { start: number; last: number; reference: Slice } | null = null;
 
-    if (isBody) {
-      const bridges =
-        runStart >= 0 && bin - lastBody <= maxGap && continues(slices[lastBody] as Slice, slice);
-      if (runStart < 0 || (bin > lastBody + 1 && !bridges)) {
-        if (runStart >= 0 && lastBody + 1 - runStart > bestEnd - bestStart) {
-          bestStart = runStart;
-          bestEnd = lastBody + 1;
-        }
-        runStart = bin;
-      }
-      lastBody = bin;
+  const close = (): void => {
+    if (current === null) return;
+    if (current.last + 1 - current.start > bestEnd - bestStart) {
+      bestStart = current.start;
+      bestEnd = current.last + 1;
+    }
+    current = null;
+  };
+
+  for (let bin = 0; bin < binCount; bin += 1) {
+    const slice = slices[bin] as Slice;
+    if (slice.thickness < threshold) continue;
+
+    if (
+      current !== null &&
+      bin - current.last <= maxGap &&
+      continues(current.reference, slice, bin > current.last + 1)
+    ) {
+      current.last = bin;
+      if (slice.thickness > current.reference.thickness) current.reference = slice;
       continue;
     }
 
-    // 途切れが長くなりすぎた（または末尾）なら、ここで区間を閉じる
-    if (runStart >= 0 && (slice === null || bin - lastBody > maxGap)) {
-      if (lastBody + 1 - runStart > bestEnd - bestStart) {
-        bestStart = runStart;
-        bestEnd = lastBody + 1;
-      }
-      runStart = -1;
-    }
+    close();
+    current = { start: bin, last: bin, reference: slice };
   }
+  close();
   if (bestStart < 0) return null;
 
-  // 本体区間は中央値で代表させる（端の 1 ビンの跳ねと、途切れの穴を拾わない）
+  // 太さと中心線は**太い断面から**取る。地の色が背景と同じだと本体の一部が
+  // 抜けて薄い断面になり（03）、中央値で取ると太さが 3 割痩せて中心もずれる。
+  // 抜けていない断面こそが本体の実寸なので、上位の分位点を代表値にする。
   const body = slices.slice(bestStart, bestEnd).filter((slice) => slice.thickness >= threshold);
+  const thickness = percentile(body.map((slice) => slice.thickness), BODY_THICKNESS_PERCENTILE);
+  const solid = body.filter((slice) => slice.thickness >= thickness * 0.9);
   return {
     start: minAlong + bestStart * binWidth,
     end: minAlong + bestEnd * binWidth,
-    thickness: percentile(body.map((slice) => slice.thickness), 0.5),
-    acrossCenter: percentile(body.map((slice) => slice.center), 0.5),
+    thickness,
+    acrossCenter: percentile((solid.length > 0 ? solid : body).map((slice) => slice.center), 0.5),
   };
 }
 
@@ -510,6 +593,8 @@ function isCandidate(value: Candidate | Rejection): value is Candidate {
  *
  * **大きさではなく形で選ぶ**のが要点。カーペットや机の質感を拾うと
  * 巨大だが細長くない塊ができるので、最大の成分をそのまま採ると外す。
+ *
+ * 本体範囲の切り方は複数試し、最も採点の高いものを返す。
  */
 function scoreComponent(
   component: readonly number[],
@@ -521,9 +606,30 @@ function scoreComponent(
     x: (index % cols) * step,
     y: Math.floor(index / cols) * step,
   }));
-
   const shape = analyseShape(points);
-  const body = bodyExtent(shape.projected, step);
+
+  let best: Candidate | null = null;
+  let lastRejection: Rejection = { reason: '本体の範囲を取れない', cells: component.length };
+  for (const ratio of BODY_THICKNESS_RATIOS) {
+    const scored = scoreExtent(component, shape, step, gridArea, ratio);
+    if (isCandidate(scored)) {
+      if (best === null || scored.score > best.score) best = scored;
+    } else {
+      lastRejection = scored;
+    }
+  }
+  return best ?? lastRejection;
+}
+
+/** ある閾値で本体範囲を切ったときの採点。 */
+function scoreExtent(
+  component: readonly number[],
+  shape: Shape,
+  step: number,
+  gridArea: number,
+  thicknessRatio: number,
+): Candidate | Rejection {
+  const body = bodyExtent(shape.projected, step, thicknessRatio);
   if (body === null || body.thickness <= 0) {
     return { reason: '本体の範囲を取れない', cells: component.length };
   }
@@ -608,10 +714,11 @@ export function locateResistorDetailed(image: RoiImage): LocateDiagnostics {
     };
   }
 
-  const radius = Math.round(Math.min(cols, rows) * OPENING_RADIUS_RATIO);
-  const opened = open(mask, cols, rows, radius);
+  const shortSide = Math.min(cols, rows);
+  const opened = open(mask, cols, rows, Math.round(shortSide * OPENING_RADIUS_RATIO));
+  const groupRadius = Math.round(shortSide * GROUP_RADIUS_RATIO);
 
-  const scored = findComponents(opened, cols, rows)
+  const scored = groupComponents(opened, cols, rows, groupRadius)
     .filter((component) => component.length >= MIN_COMPONENT_CELLS)
     .map((component) => scoreComponent(component, cols, step, mask.length));
 

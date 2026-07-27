@@ -361,3 +361,81 @@ describe('locateResistor — 従来の挙動を壊さない', () => {
     expect(locateResistor(image)).toBeNull();
   });
 });
+
+describe('locateResistor — 背景と色が近くてマスクが分断される場合', () => {
+  /** 本体の一部を背景色で塗り潰して「抜け」を作る。 */
+  function withGaps(image: RoiImage, gaps: readonly number[], background: Rgb): RoiImage {
+    const data = new Uint8ClampedArray(image.data);
+    for (const at of gaps) {
+      for (let y = 0; y < image.height; y += 1) {
+        for (let x = at; x < at + 14; x += 1) {
+          const offset = (y * image.width + x) * 4;
+          data[offset] = background[0];
+          data[offset + 1] = background[1];
+          data[offset + 2] = background[2];
+        }
+      }
+    }
+    return { width: image.width, height: image.height, data };
+  }
+
+  it('バンドが背景に溶けて島に割れても、本体全体を 1 つとして囲む', () => {
+    // Arrange: 本体 240px を 3 か所で背景色に置き換え、4 つの島にする
+    const background: Rgb = [40, 38, 36];
+    const base = drawScene({
+      width: 400,
+      height: 300,
+      background,
+      bar: [210, 180, 140],
+      length: 240,
+      thickness: 90,
+    });
+    const image = withGaps(base, [110, 170, 230], background);
+
+    // Act
+    const box = locateResistor(image);
+
+    // Assert: 島 1 つ（60px 弱）ではなく本体全体を囲む
+    expect(box).not.toBeNull();
+    expect(box!.length).toBeGreaterThan(180);
+    expect(box!.thickness).toBeGreaterThan(70);
+  });
+
+  it('本体の地の色が背景と同じでも、バンドの並びから本体を囲む', () => {
+    // Arrange: 地の色＝背景色。色が付いているのはバンドだけ（03 の状況）
+    const background: Rgb = [235, 233, 236];
+    const image = drawScene({
+      width: 400,
+      height: 300,
+      background,
+      bar: background,
+      length: 240,
+      thickness: 90,
+    });
+    for (const [at, rgb] of [
+      [110, [200, 40, 60]],
+      [140, [190, 150, 40]],
+      [170, [60, 130, 190]],
+      [200, [220, 90, 50]],
+      [230, [90, 60, 40]],
+      [260, [200, 40, 60]],
+    ] as [number, Rgb][]) {
+      for (let y = 105; y < 195; y += 1) {
+        for (let x = at; x < at + 14; x += 1) {
+          const offset = (y * 400 + x) * 4;
+          image.data[offset] = rgb[0];
+          image.data[offset + 1] = rgb[1];
+          image.data[offset + 2] = rgb[2];
+        }
+      }
+    }
+
+    // Act
+    const box = locateResistor(image);
+
+    // Assert: バンド 1 本（14px）ではなく、バンドが並ぶ範囲（164px）を囲む
+    expect(box).not.toBeNull();
+    expect(box!.length).toBeGreaterThan(120);
+    expect(box!.thickness).toBeGreaterThan(70);
+  });
+});
