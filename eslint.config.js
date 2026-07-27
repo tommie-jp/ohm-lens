@@ -22,4 +22,9 @@ export default tseslint.config(
     files: ['src/debug/**/*.ts'],
     rules: { 'no-console': 'off' },
   },
+  {
+    // CLI は進捗と集計を標準出力に出すのが仕事
+    files: ['scripts/**/*.ts'],
+    rules: { 'no-console': 'off' },
+  },
 );

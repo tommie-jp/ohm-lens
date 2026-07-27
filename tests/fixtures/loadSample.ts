@@ -32,6 +32,11 @@ export interface SampleEntry {
   readonly source: string;
 }
 
+/** sample/ の場所（焼き込み出力などで元画像のパスが要る場合に使う）。 */
+export function sampleDir(): string {
+  return SAMPLE_DIR;
+}
+
 export function hasSamples(): boolean {
   return existsSync(join(SAMPLE_DIR, 'MANIFEST.json'));
 }

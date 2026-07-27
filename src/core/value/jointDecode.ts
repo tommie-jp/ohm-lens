@@ -2,7 +2,14 @@ import type { BandColor, LabColor, ReadDirection, ResistorReading } from '../../
 import { rankBandColors } from '../bands/classify.js';
 import { DEFAULT_PALETTE, type Palette } from '../color/palette.js';
 import { clamp01 } from '../math.js';
-import { MAX_BANDS, MIN_BANDS } from './codeTable.js';
+import {
+  digitOf,
+  MAX_BANDS,
+  MIN_BANDS,
+  multiplierOf,
+  tempCoefficientOf,
+  toleranceOf,
+} from './codeTable.js';
 import { decodeBandSequence, type DecodedValue } from './decode.js';
 
 /**
@@ -19,6 +26,27 @@ import { decodeBandSequence, type DecodedValue } from './decode.js';
  * - 余分なランの除去コスト（幅が広いほど落としにくい）
  * を合算したコストが最小になる解釈を、両方向・全候補から選ぶ。
  */
+
+/** バンドがカラーコード上で担う役割。 */
+export type BandRole = 'digit' | 'multiplier' | 'tolerance' | 'tempco';
+
+/** 採用したラン 1 本ぶんの解釈。デバッグ表示に使う。 */
+export interface UsedRun {
+  /** 入力したランの添字（画像上の並び順） */
+  readonly runIndex: number;
+  readonly color: BandColor;
+  readonly role: BandRole;
+  /** 役割の内容を表示用に整えた文字列（例: '2' '×10' '±5%' '50ppm'） */
+  readonly roleText: string;
+}
+
+/** 同時デコードの結果。値に加えて「どう解釈したか」を持つ。 */
+export interface JointReading extends ResistorReading {
+  /** 採用したランと役割（runIndex の昇順） */
+  readonly usedRuns: readonly UsedRun[];
+  /** ノイズとして捨てたランの添字 */
+  readonly droppedRuns: readonly number[];
+}
 
 /** 解析済みのラン。分類前の色（Lab）を持つ。 */
 export interface JointRun {
@@ -65,6 +93,38 @@ interface Interpretation {
   readonly direction: ReadDirection;
   readonly cost: number;
   readonly meanDeltaE: number;
+  /** 採用したランの添字（画像上の並び順） */
+  readonly keptIndices: readonly number[];
+  /** 読み取り方向に並べ替えた色列 */
+  readonly orientedColors: readonly BandColor[];
+}
+
+/**
+ * 色列の各位置がカラーコード上で担う役割を求める。
+ *
+ * 3/4 バンドは数字 2 桁、5/6 バンドは数字 3 桁。表示用の文字列は
+ * `codeTable` から引くだけで、対応表をここに重複させない。
+ */
+function rolesFor(colors: readonly BandColor[]): { role: BandRole; roleText: string }[] {
+  const digitCount = colors.length <= 4 ? 2 : 3;
+
+  return colors.map((color, position) => {
+    if (position < digitCount) {
+      return { role: 'digit' as const, roleText: String(digitOf(color) ?? '?') };
+    }
+    if (position === digitCount) {
+      return { role: 'multiplier' as const, roleText: formatMultiplier(multiplierOf(color)) };
+    }
+    if (position === digitCount + 1) {
+      return { role: 'tolerance' as const, roleText: `±${toleranceOf(color) ?? '?'}%` };
+    }
+    return { role: 'tempco' as const, roleText: `${tempCoefficientOf(color) ?? '?'}ppm` };
+  });
+}
+
+/** 倍率を ×10 / ×0.01 のように読める形にする。 */
+function formatMultiplier(multiplier: number): string {
+  return `×${multiplier >= 1 ? multiplier.toLocaleString('en-US') : String(multiplier)}`;
 }
 
 /** ランごとの色候補（近い順、遠すぎるものは除外）。 */
@@ -107,7 +167,7 @@ function keepMasks(count: number): number[] {
 export function jointReadResistor(
   runs: readonly JointRun[],
   options: JointOptions = {},
-): ResistorReading | null {
+): JointReading | null {
   if (runs.length < MIN_BANDS) return null;
 
   const palette = options.palette ?? DEFAULT_PALETTE;
@@ -174,6 +234,8 @@ export function jointReadResistor(
             direction,
             cost: meanDeltaE + dropCost + snapCost,
             meanDeltaE,
+            keptIndices: [...keptIndices],
+            orientedColors: [...oriented],
           });
         }
         return;
@@ -199,6 +261,23 @@ export function jointReadResistor(
       : clamp01((runnerUp.cost - chosen.cost) / Math.max(1, runnerUp.cost + chosen.cost));
   const confidence = clamp01(absolute * (0.4 + 0.6 * margin));
 
+  // 採用した解釈を「画像上の並び順」に戻す。rtl のときは役割が末尾から付く。
+  const roles = rolesFor(chosen.orientedColors);
+  const usedRuns: UsedRun[] = chosen.keptIndices.map((runIndex, position) => {
+    const oriented = chosen.direction === 'ltr' ? position : chosen.keptIndices.length - 1 - position;
+    return {
+      runIndex,
+      color: chosen.orientedColors[oriented] as BandColor,
+      role: (roles[oriented] as { role: BandRole }).role,
+      roleText: (roles[oriented] as { roleText: string }).roleText,
+    };
+  });
+
+  const kept = new Set(chosen.keptIndices);
+  const droppedRuns = capped
+    .map((_, index) => index)
+    .filter((index) => !kept.has(index));
+
   return {
     ohms: chosen.decoded.ohms,
     rawOhms: chosen.decoded.rawOhms,
@@ -207,5 +286,7 @@ export function jointReadResistor(
     series: chosen.decoded.series,
     direction: chosen.direction,
     confidence,
+    usedRuns,
+    droppedRuns,
   };
 }
