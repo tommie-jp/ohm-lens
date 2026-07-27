@@ -1,8 +1,9 @@
 import sharp from 'sharp';
-import { analyzeRoi, type AnalyzeOptions } from '../core/pipeline.js';
-import { locateResistor, type OrientedBox } from '../core/locate.js';
-import { rectify, type RectifyOptions } from '../core/rectify.js';
-import { bodyColumns } from '../core/roiMapping.js';
+import { analyzeRoi } from '../core/pipeline.js';
+import { locateResistor } from '../core/locate.js';
+import { rectify } from '../core/rectify.js';
+import { refineBoxByBands } from '../core/refine.js';
+import { analyzeOptions, refineOptions, ROI_OPTIONS } from '../core/settings.js';
 import { formatOhms } from '../core/format.js';
 import { jointReadResistor } from '../core/value/jointDecode.js';
 import { DEFAULT_PALETTE, type Palette } from '../core/color/palette.js';
@@ -17,52 +18,6 @@ import { buildAnnotationSvg } from './render.js';
  * デバッグツールなので、失敗が消えてしまわないことが大事。
  */
 
-/**
- * ROI の余白。検出した本体範囲の外側をどれだけ含めるか。
- *
- * 検出ボックスは本体にぴったり張り付くので、そのまま切ると端のバンドが
- * 半分欠ける（バンドは丸まった肩に載っている）。39 枚での実測では
- * 0.22〜0.32 の範囲が頭打ちで一致 14〜16 枚、その外側は急に落ちる。
- * 平坦な区間の真ん中を採る。
- */
-const ROI_PADDING = 0.28;
-
-/**
- * 本体の外側をどれだけバンド探索に含めるか（本体長に対する割合）。
- *
- * 0（検出した本体そのもの）が最良だった。外へ広げるほど落ちる
- * （0 → 19 枚、0.03 → 17 枚、0.06 → 9 枚）。ROI の余白 0.28 で既に
- * 肩まで入っているため、これ以上外を見ると背景がバンドになる。
- */
-const BODY_MARGIN = 0;
-
-/**
- * 本体クラスタでの明度の重み。
- *
- * 円筒の陰影で本体の L\* は中央値 15・最大 25 ばらつく。素の CIE76 だと
- * 陰の部分が別クラスタになりバンドとして数えられる。実測では
- * 1 → 17 枚、0.7 → 19 枚、0.5 → 18 枚、0.2 → 8 枚。
- */
-const BODY_LIGHTNESS_WEIGHT = 0.6;
-
-/** GUI・テストハーネスと揃えた ROI の切り出し条件。 */
-export const ROI_OPTIONS: RectifyOptions = { padding: ROI_PADDING, targetHeight: 40 };
-
-/**
- * ROI の解析条件。検出結果から本体の位置を渡すのが要点。
- *
- * `bodyExtent` によるプロファイルからの推定は 39 枚中 25 枚で外れていた
- * （広すぎ 10・狭すぎ 15）。広すぎれば背景がバンドになり、狭すぎれば端の
- * バンドが消える。検出側が本体の位置を持っているので、そちらを信じる。
- *
- * デバッグツールと本番で条件がずれないよう、ここだけを見れば済むようにする。
- */
-export function analyzeOptions(box: OrientedBox, palette: Palette): AnalyzeOptions {
-  return {
-    segment: { palette, bodyLightnessWeight: BODY_LIGHTNESS_WEIGHT },
-    bodyRange: bodyColumns(box, ROI_OPTIONS, BODY_MARGIN),
-  };
-}
 
 /** 解析前に縮小する長辺の画素数。実機の解析と条件を揃える。 */
 const DECODE_MAX_SIZE = 800;
@@ -113,12 +68,12 @@ export async function annotateImage(
 ): Promise<AnnotateResult> {
   const palette = options.palette ?? DEFAULT_PALETTE;
   const image = await loadRoiImage(path);
-  const box = locateResistor(image);
+  const located = locateResistor(image);
 
   const expected =
     options.expectedOhms === undefined ? '期待 不明' : `期待 ${formatOhms(options.expectedOhms)}`;
 
-  if (box === null) {
+  if (located === null) {
     const svg = buildAnnotationSvg({
       width: image.width,
       height: image.height,
@@ -137,6 +92,8 @@ export async function annotateImage(
     };
   }
 
+  // カラーコードの並びを手がかりに、枠を長軸方向へ広げ直す
+  const box = refineBoxByBands(located, image, refineOptions(palette));
   const roi = rectify(image, box, ROI_OPTIONS);
   const result = analyzeRoi(roi, analyzeOptions(box, palette));
   // 役割つきの解釈が要るので、同じランで joint デコードを取り直す

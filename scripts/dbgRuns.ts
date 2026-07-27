@@ -1,8 +1,10 @@
 import { existsSync, mkdirSync, readFileSync } from 'node:fs';
 import { basename, extname, join } from 'node:path';
 import sharp from 'sharp';
-import { analyzeOptions, loadRoiImage, ROI_OPTIONS } from '../src/annotate/pipeline.js';
+import { loadRoiImage } from '../src/annotate/pipeline.js';
+import { analyzeOptions, refineOptions, ROI_OPTIONS } from '../src/core/settings.js';
 import { locateResistor } from '../src/core/locate.js';
+import { refineBoxByBands } from '../src/core/refine.js';
 import { rectify } from '../src/core/rectify.js';
 import { analyzeRoi } from '../src/core/pipeline.js';
 import { splitRuns, identifyBody } from '../src/core/bands/runs.js';
@@ -99,12 +101,13 @@ const shadingSpread: number[] = [];
 
 for (const path of paths) {
   const image = await loadRoiImage(path);
-  const box = locateResistor(image);
-  if (box === null) {
+  const located = locateResistor(image);
+  if (located === null) {
     console.log(`${basename(path)} 検出失敗`);
     continue;
   }
 
+  const box = refineBoxByBands(located, image, refineOptions(palette));
   const roi = rectify(image, box, ROI_OPTIONS);
   const result = analyzeRoi(roi, analyzeOptions(box, palette));
 

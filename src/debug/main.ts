@@ -1,5 +1,7 @@
 import { analyzeRoi, type AnalysisResult } from '../core/pipeline.js';
 import { locateResistor, type OrientedBox } from '../core/locate.js';
+import { refineBoxByBands } from '../core/refine.js';
+import { analyzeOptions, refineOptions, ROI_OPTIONS } from '../core/settings.js';
 import { rectify } from '../core/rectify.js';
 import type { RoiImage } from '../core/bands/profile.js';
 import { withOverrides, DEFAULT_PALETTE, type Palette } from '../core/color/palette.js';
@@ -190,8 +192,7 @@ function redrawSource(): void {
 }
 
 /** テストのフィクスチャハーネスと揃えた ROI の切り出し条件。 */
-const ROI_PADDING = 0.06;
-const ROI_HEIGHT = 40;
+
 
 /**
  * 解析対象の ROI を用意する。
@@ -206,16 +207,18 @@ function buildRoi(): RoiImage | null {
   if (elements.autoToggle.checked) {
     const full = context.getImageData(0, 0, source.width, source.height);
     const image: RoiImage = { width: full.width, height: full.height, data: full.data };
-    const box = locateResistor(image);
-    if (box === null) {
+    const located = locateResistor(image);
+    if (located === null) {
       statusParts.detection = '抵抗器を検出できません';
       renderStatus();
       return null;
     }
+    // カラーコードの並びで枠を広げ直す（バッチ・較正と同じ経路）
+    const box = refineBoxByBands(located, image, refineOptions(activePalette() ?? undefined));
     detectedBox = box;
     statusParts.detection = `検出 ${box.angleDeg.toFixed(0)}° / ${Math.round(box.length)}px`;
     renderStatus();
-    return rectify(image, box, { padding: ROI_PADDING, targetHeight: ROI_HEIGHT });
+    return rectify(image, box, ROI_OPTIONS);
   }
 
   detectedBox = null;
@@ -246,10 +249,16 @@ function analyzeSelection(): void {
   imageData.data.set(roi.data);
   roiContext.putImageData(imageData, 0, 0);
 
-  const effective = activePalette();
+  // 自動検出のときは検出枠から本体の位置を渡す（バッチ・較正と同じ条件）。
+  // 手動指定のときは枠が無いので、従来どおりプロファイルから推定させる。
+  const effective = activePalette() ?? undefined;
   const result = analyzeRoi(roi, {
     adaptWhiteBalance: elements.adaptToggle.checked,
-    ...(effective === null ? {} : { segment: { palette: effective } }),
+    ...(detectedBox === null
+      ? effective === undefined
+        ? {}
+        : { segment: { palette: effective } }
+      : analyzeOptions(detectedBox, effective)),
   });
   lastResult = result;
 
@@ -272,7 +281,7 @@ function drawOverlay(result: AnalysisResult): void {
   // extent でスライスした場合、Band の列番号は ROI 基準のままなので
   // そのまま逆変換できる（roiMapping のテストで固定済み）
   drawDetectionOverlay(context2d(elements.sourceCanvas), detectedBox, result.bands, {
-    rectify: { padding: ROI_PADDING, targetHeight: ROI_HEIGHT },
+    rectify: ROI_OPTIONS,
   });
 }
 

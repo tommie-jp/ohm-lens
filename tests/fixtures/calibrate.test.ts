@@ -3,6 +3,7 @@ import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { extractProfile } from '../../src/core/bands/profile.js';
 import { locateResistor } from '../../src/core/locate.js';
+import { refineBoxByBands } from '../../src/core/refine.js';
 import { rectify } from '../../src/core/rectify.js';
 import { bodyColumns } from '../../src/core/roiMapping.js';
 import { bandRuns } from '../../src/core/bands/segment.js';
@@ -104,10 +105,15 @@ describe.skipIf(!hasSamples())('基準色の較正', () => {
 
     for (const entry of entries) {
       const image = await loadImage(entry.file);
-      const box = locateResistor(image);
-      if (box === null) continue;
+      const located = locateResistor(image);
+      if (located === null) continue;
 
       const rectifyOptions = { padding: ROI_PADDING, targetHeight: ROI_HEIGHT };
+      // 解析側と同じく、カラーコードの並びで枠を広げ直してから切り出す
+      const box = refineBoxByBands(located, image, {
+        rectify: rectifyOptions,
+        segment: { palette, bodyLightnessWeight: BODY_LIGHTNESS_WEIGHT },
+      });
       const roi = rectify(image, box, rectifyOptions);
       // 本体の位置は検出結果から決める。較正は取りこぼしを避けたいので広めに取る
       const body = bodyColumns(box, rectifyOptions, BODY_MARGIN);
