@@ -4,6 +4,9 @@ import type { RectifyOptions } from '../core/rectify.js';
 import { bandCorners, labelAnchor } from '../core/roiMapping.js';
 import { BAND_COLOR_ABBR, BAND_COLOR_JA, bandColorCss } from '../core/color/colors.js';
 import type { UsedRun } from '../core/value/jointDecode.js';
+import type { LabColor } from '../types.js';
+import type { Palette } from '../core/color/palette.js';
+import { buildColorSpaceSvg, COLOR_SPACE_PANEL_HEIGHT } from './colorSpace.js';
 
 /**
  * 検出結果を SVG として組み立てる（Node 側の焼き込み用）。
@@ -36,6 +39,20 @@ export interface AnnotateInput {
   readonly caption: string;
   /** 日本語フォントが無い環境では false にして英字にする */
   readonly japanese?: boolean;
+  /**
+   * 左下に色空間を描くための基準色と実測色。
+   * 省略すると描かない（帯も足さない）。
+   */
+  readonly colorSpace?: {
+    readonly palette: Palette;
+    /** 検出したバンドの実測色 */
+    readonly observed: readonly LabColor[];
+  };
+}
+
+/** 色空間パネルのぶん下に伸ばす高さ [px]。描かないなら 0。 */
+export function panelHeightFor(input: Pick<AnnotateInput, 'colorSpace'>): number {
+  return input.colorSpace === undefined ? 0 : COLOR_SPACE_PANEL_HEIGHT;
 }
 
 function escapeXml(text: string): string {
@@ -148,8 +165,19 @@ export function buildAnnotationSvg(input: AnnotateInput): string {
       `${escapeXml(input.caption)}</text>`,
   );
 
+  const panelHeight = panelHeightFor(input);
+  if (input.colorSpace !== undefined) {
+    parts.push(
+      buildColorSpaceSvg(input.colorSpace.palette, input.colorSpace.observed, {
+        x: 0,
+        y: input.height,
+        japanese,
+      }),
+    );
+  }
+
   return (
     `<svg xmlns="http://www.w3.org/2000/svg" width="${input.width}" ` +
-    `height="${input.height}">${parts.join('')}</svg>`
+    `height="${input.height + panelHeight}">${parts.join('')}</svg>`
   );
 }

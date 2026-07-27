@@ -8,7 +8,7 @@ import { formatOhms } from '../core/format.js';
 import { jointReadResistor } from '../core/value/jointDecode.js';
 import { DEFAULT_PALETTE, type Palette } from '../core/color/palette.js';
 import type { RoiImage } from '../core/bands/profile.js';
-import { buildAnnotationSvg } from './render.js';
+import { buildAnnotationSvg, panelHeightFor } from './render.js';
 
 /**
  * 1 枚の写真を検出・解析し、結果を焼き込んだ画像を返す。
@@ -74,17 +74,18 @@ export async function annotateImage(
     options.expectedOhms === undefined ? '期待 不明' : `期待 ${formatOhms(options.expectedOhms)}`;
 
   if (located === null) {
-    const svg = buildAnnotationSvg({
+    const input = {
       width: image.width,
       height: image.height,
       box: null,
       bands: [],
       rectify: ROI_OPTIONS,
       caption: `${label} | ${expected} | 検出失敗`,
+      colorSpace: { palette, observed: [] },
       ...(options.japanese === undefined ? {} : { japanese: options.japanese }),
-    });
+    };
     return {
-      jpeg: await composite(image, svg),
+      jpeg: await composite(image, buildAnnotationSvg(input), panelHeightFor(input)),
       caption: `${label} | ${expected} | 検出失敗`,
       located: false,
       ohms: null,
@@ -116,24 +117,42 @@ export async function annotateImage(
     `${box.angleDeg.toFixed(0)}° L${Math.round(box.length)} T${Math.round(box.thickness)} ` +
     `(比 ${(box.length / box.thickness).toFixed(2)}) | ${bandSummary}`;
 
-  const svg = buildAnnotationSvg({
+  const input = {
     width: image.width,
     height: image.height,
     box,
     bands: result.bands,
     rectify: ROI_OPTIONS,
     caption,
+    // 実測色は分類前のランの Lab（基準色にどう引き寄せられたかを見るため）
+    colorSpace: { palette, observed: result.runs.map((run) => run.lab) },
     ...(joint === null ? {} : { usedRuns: joint.usedRuns, droppedRuns: joint.droppedRuns }),
     ...(options.japanese === undefined ? {} : { japanese: options.japanese }),
-  });
+  };
 
-  return { jpeg: await composite(image, svg), caption, located: true, ohms, correct };
+  return {
+    jpeg: await composite(image, buildAnnotationSvg(input), panelHeightFor(input)),
+    caption,
+    located: true,
+    ohms,
+    correct,
+  };
 }
 
-async function composite(image: RoiImage, svg: string): Promise<Buffer> {
-  return sharp(Buffer.from(image.data), {
+/**
+ * 元画像に SVG を焼き込む。色空間パネルのぶんだけ下に伸ばしてから重ねる。
+ * 写真の上に重ねると抵抗器が隠れるので、キャンバスを広げて場所を作る。
+ */
+async function composite(image: RoiImage, svg: string, panelHeight: number): Promise<Buffer> {
+  const base = sharp(Buffer.from(image.data), {
     raw: { width: image.width, height: image.height, channels: 4 },
-  })
+  });
+  const extended =
+    panelHeight === 0
+      ? base
+      : base.extend({ bottom: panelHeight, background: '#ffffff' });
+
+  return extended
     .composite([{ input: Buffer.from(svg), top: 0, left: 0 }])
     .jpeg({ quality: 88 })
     .toBuffer();

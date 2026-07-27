@@ -1,7 +1,9 @@
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { annotateImage } from '../../src/annotate/pipeline.js';
+import sharp from 'sharp';
+import { annotateImage, loadRoiImage } from '../../src/annotate/pipeline.js';
+import { COLOR_SPACE_PANEL_HEIGHT } from '../../src/annotate/colorSpace.js';
 import { hasSamples, loadManifest, loadPalette, sampleDir } from './loadSample.js';
 
 /**
@@ -34,5 +36,21 @@ describe.skipIf(!hasSamples())('検出結果の焼き込み', () => {
 
     writeFileSync(join(OUT_DIR, 'summary.txt'), captions.join('\n') + '\n', 'utf-8');
     expect(captions).toHaveLength(entries.length);
+  });
+
+  it('色空間パネルのぶん、出力画像が下に伸びている', async () => {
+    // Arrange: 1 枚だけで確認する（全件は上のテストで見ている）
+    const entry = loadManifest()[0];
+    if (entry === undefined) return;
+    const path = join(sampleDir(), entry.file);
+    const source = await loadRoiImage(path);
+
+    // Act
+    const result = await annotateImage(path, entry.file, { palette: loadPalette() });
+    const meta = await sharp(result.jpeg).metadata();
+
+    // Assert: 写真は隠さず、下に帯を足している
+    expect(meta.width).toBe(source.width);
+    expect(meta.height).toBe(source.height + COLOR_SPACE_PANEL_HEIGHT);
   });
 });
