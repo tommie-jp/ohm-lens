@@ -4,6 +4,31 @@
 # ローカル専用メモ（ドキュメント本体ではない）
 *-ignore.md
 
+# 依存とビルド成果物
+node_modules/
+dist/
+build/
+.vite/
+*.tsbuildinfo
+
+# 環境変数
+.env
+.env.*
+!.env.example
+
+# 学習データ・生成モデル（サイズが大きいため git 管理外）
+datasets/
+runs/
+*.onnx
+*.pt
+
+# テスト・カバレッジ
+coverage/
+.nyc_output/
+playwright-report/
+test-results/
+.playwright-mcp/
+
 # OS / エディタが生成するファイル
 .DS_Store
 Thumbs.db
@@ -13,8 +38,3 @@ Thumbs.db
 
 # Windows のダウンロード時メタデータ（WSL で混入する孤立ファイル）
 *:Zone.Identifier
-
-# EDA ツールのバックアップ・自動生成物
-*-backups/
-*.kicad_prl
-fp-info-cache

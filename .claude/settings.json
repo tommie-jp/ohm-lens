@@ -1,12 +1,15 @@
 {
   "permissions": {
     "allow": [
-      "Bash(plantuml *.puml)",
-      "Bash(plantuml diagrams/*.puml)",
-      "Bash(cd diagrams && plantuml *.puml)",
-      "Bash(dot -V)",
-      "Bash(java -version)",
+      "Bash(npm run *)",
+      "Bash(npm test *)",
+      "Bash(npm ls *)",
+      "Bash(npx tsc *)",
+      "Bash(npx vitest *)",
       "Bash(npx markdownlint-cli *)",
+      "Bash(node --version)",
+      "Bash(plantuml *.puml)",
+      "Bash(cd diagrams && plantuml *.puml)",
 
       "Bash(ls *)",
       "Bash(find . *)",
