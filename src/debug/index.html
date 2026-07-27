@@ -52,12 +52,17 @@
       </section>
 
       <section>
-        <h2>4. バンド抽出と分類</h2>
+        <h2>4. バンド抽出と分類（推測。誤っていれば直してください）</h2>
+        <p class="hint">
+          色のプルダウンを直すと、下の「正解ラベル」が更新されます。修正した
+          ラベルは <code>sample/labels.json</code> に貼ると較正に反映されます。
+        </p>
         <table id="bands-table">
           <thead>
             <tr>
               <th>#</th>
-              <th>色</th>
+              <th>推測</th>
+              <th>修正</th>
               <th>位置</th>
               <th>幅</th>
               <th>確信度</th>
@@ -69,7 +74,20 @@
       </section>
 
       <section>
-        <h2>5. 読み取り結果</h2>
+        <h2>5. 正解ラベル（学習用）</h2>
+        <div class="controls">
+          <label>
+            ファイル名
+            <input type="text" id="label-name" size="34" placeholder="20-2.2kohm-5pct.jpg" />
+          </label>
+          <button type="button" id="copy-label">クリップボードにコピー</button>
+          <span class="hint" id="copy-status"></span>
+        </div>
+        <pre id="label-json" class="code">（バンドを検出すると表示されます）</pre>
+      </section>
+
+      <section>
+        <h2>6. 読み取り結果</h2>
         <output id="reading" class="reading">?</output>
         <dl id="reading-detail" class="detail"></dl>
       </section>

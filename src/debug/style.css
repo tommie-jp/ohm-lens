@@ -109,3 +109,18 @@ td {
 [hidden] {
   display: none !important;
 }
+
+.code {
+  padding: 0.6rem 0.8rem;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: color-mix(in srgb, currentColor 5%, transparent);
+  font-size: 0.85rem;
+  overflow-x: auto;
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+
+td select {
+  font-size: 0.85rem;
+}

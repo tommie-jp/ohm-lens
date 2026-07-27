@@ -1,16 +1,17 @@
-import { writeFileSync } from 'node:fs';
+import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { extractProfile } from '../../src/core/bands/profile.js';
 import { locateResistor } from '../../src/core/locate.js';
 import { rectify } from '../../src/core/rectify.js';
 import { identifyBody, splitRuns } from '../../src/core/bands/runs.js';
+import { alignRunsToBands } from '../../src/core/bands/align.js';
 import { buildBodyAnchorAdaptation } from '../../src/core/color/anchor.js';
 import { adaptToAnchor } from '../../src/core/color/whiteBalance.js';
-import { deltaE2000, labToRgb } from '../../src/core/color/colorSpace.js';
+import { labToRgb } from '../../src/core/color/colorSpace.js';
 import { BAND_REFERENCE_COLORS } from '../../src/core/color/colors.js';
 import type { BandColor, LabColor, ProfileSample } from '../../src/types.js';
-import { hasSamples, loadImage, loadManifest, type SampleEntry } from './loadSample.js';
+import { hasSamples, loadImage, loadManifest, loadPalette, type SampleEntry } from './loadSample.js';
 
 /**
  * 基準色テーブルの較正（Step 0-7）。
@@ -21,12 +22,21 @@ import { hasSamples, loadImage, loadManifest, type SampleEntry } from './loadSam
  */
 
 const REPORT_PATH = join(import.meta.dirname, '../../calibration.txt');
+/** 学習結果のパレット。ここに書き出したものを解析側が読み込む。 */
+const PALETTE_PATH = join(import.meta.dirname, '../../../sample/palette.json');
+/** 人手による修正ラベル。推測が間違っていたときはここで上書きする。 */
+const LABELS_PATH = join(import.meta.dirname, '../../../sample/labels.json');
+
+/** 対応付けのコストがこれを超えたら信用せず、較正に使わない。 */
+const MAX_ALIGN_COST = 25;
 
 const ROI_HEIGHT = 40;
 const ROI_PADDING = 0.06;
 const EDGE_DELTA_E = 4;
 const CLUSTER_DELTA_E = 4;
 const MIN_RUN_LENGTH = 3;
+/** この件数に満たない色は学習結果として採用しない（既定値のまま残す）。 */
+const MIN_SAMPLES_PER_COLOR = 3;
 
 const DIGITS: BandColor[] = [
   'black', 'brown', 'red', 'orange', 'yellow', 'green', 'blue', 'violet', 'grey', 'white',
@@ -39,8 +49,16 @@ const TOLERANCE_COLOR: Record<number, BandColor> = {
   0.1: 'violet', 0.5: 'green', 1: 'brown', 2: 'red', 5: 'gold', 10: 'silver',
 };
 
+/** 人手による修正ラベル（ファイル名 → 正しいバンド列）。 */
+function loadLabels(): Record<string, BandColor[]> {
+  if (!existsSync(LABELS_PATH)) return {};
+  return JSON.parse(readFileSync(LABELS_PATH, 'utf-8')) as Record<string, BandColor[]>;
+}
+
 /** 抵抗値と許容差から、あり得るバンド列を列挙する（2桁=4本 / 3桁=5本）。 */
-function candidateSequences(entry: SampleEntry): BandColor[][] {
+function candidateSequences(entry: SampleEntry, labels: Record<string, BandColor[]>): BandColor[][] {
+  const manual = labels[entry.file];
+  if (manual) return [manual];
   if (entry.bands) return [entry.bands as BandColor[]];
 
   const sequences: BandColor[][] = [];
@@ -84,14 +102,6 @@ function extractRuns(profile: readonly ProfileSample[]): Run[] {
     .map(({ run }) => ({ lab: run.lab, length: run.end - run.start }));
 }
 
-/** 現在の基準色に対する総 ΔE。小さいほど「その並びらしい」。 */
-function sequenceCost(runs: readonly Run[], sequence: readonly BandColor[]): number {
-  return runs.reduce(
-    (sum, run, index) => sum + deltaE2000(run.lab, BAND_REFERENCE_COLORS[sequence[index] as BandColor]),
-    0,
-  );
-}
-
 function medianLab(samples: readonly LabColor[]): LabColor {
   const pick = (key: (c: LabColor) => number): number => {
     const values = samples.map(key).sort((a, b) => a - b);
@@ -103,6 +113,9 @@ function medianLab(samples: readonly LabColor[]): LabColor {
 describe.skipIf(!hasSamples())('基準色の較正', () => {
   it('実写真からバンド色の Lab を集計する', { timeout: 600_000 }, async () => {
     const entries = loadManifest();
+    const labels = loadLabels();
+    // 前回の学習結果があれば、それを使って対応付ける（反復するほど精度が上がる）
+    const palette = loadPalette();
     const observed = new Map<BandColor, LabColor[]>();
     const lines: string[] = [];
     let matched = 0;
@@ -118,27 +131,39 @@ describe.skipIf(!hasSamples())('基準色の較正', () => {
       const profile = raw.map((s) => ({ x: s.x, lab: adaptToAnchor(s.lab, adaptation) }));
       const runs = extractRuns(profile);
 
-      // 本数が一致する並びだけを採用する（順方向・逆方向の両方を試す）
-      const options = candidateSequences(entry)
-        .filter((sequence) => sequence.length === runs.length)
-        .flatMap((sequence) => [sequence, [...sequence].reverse()]);
-      if (options.length === 0) {
-        lines.push(`  - ${entry.file}: ラン ${runs.length} 本、一致する並びなし`);
-        continue;
+      // 余分なランを飛ばしながら対応付ける（本数一致は要求しない）
+      let bestAligned: { cost: number; sequence: BandColor[]; assignments: readonly { runIndex: number; color: BandColor }[] } | null = null;
+      for (const sequence of candidateSequences(entry, labels)) {
+        for (const oriented of [sequence, [...sequence].reverse()]) {
+          const aligned = alignRunsToBands(
+            runs.map((run) => ({ lab: run.lab, width: run.length })),
+            oriented,
+            { maxSkips: 4, palette },
+          );
+          if (aligned !== null && (bestAligned === null || aligned.cost < bestAligned.cost)) {
+            bestAligned = { cost: aligned.cost, sequence: oriented, assignments: aligned.assignments };
+          }
+        }
       }
 
-      const bestSequence = options.reduce((best, sequence) =>
-        sequenceCost(runs, sequence) < sequenceCost(runs, best) ? sequence : best,
-      );
+      if (bestAligned === null) {
+        lines.push(`  - ${entry.file}: ラン ${runs.length} 本、対応付け不可`);
+        continue;
+      }
+      if (bestAligned.cost > MAX_ALIGN_COST) {
+        lines.push(`  ! ${entry.file}: コスト ${bestAligned.cost.toFixed(1)} が高すぎるため較正に使わない`);
+        continue;
+      }
       matched += 1;
-      lines.push(`  ○ ${entry.file}: ${bestSequence.join('-')}`);
+      lines.push(`  ○ ${entry.file}: ${bestAligned.sequence.join('-')} (コスト ${bestAligned.cost.toFixed(1)})`);
 
-      runs.forEach((run, index) => {
-        const color = bestSequence[index] as BandColor;
+      for (const { runIndex, color } of bestAligned.assignments) {
+        const run = runs[runIndex];
+        if (run === undefined) continue;
         const list = observed.get(color) ?? [];
         list.push(run.lab);
         observed.set(color, list);
-      });
+      }
     }
 
     const table: string[] = ['', `並びが一致した画像: ${matched}/${entries.length}`, ''];
@@ -160,6 +185,17 @@ describe.skipIf(!hasSamples())('基準色の較正', () => {
           `[${Math.round(rgb.r * 255)}, ${Math.round(rgb.g * 255)}, ${Math.round(rgb.b * 255)}]`,
       );
     }
+
+    // 学習したパレットを書き出す（データが取れた色だけ）
+    const learned: Partial<Record<BandColor, LabColor>> = {};
+    for (const [color, samples] of observed) {
+      if (samples.length >= MIN_SAMPLES_PER_COLOR) learned[color] = medianLab(samples);
+    }
+    writeFileSync(
+      PALETTE_PATH,
+      JSON.stringify({ generatedFrom: `${matched} images`, colors: learned }, null, 2) + '\n',
+      'utf-8',
+    );
 
     writeFileSync(REPORT_PATH, [...table, '', ...lines, ''].join('\n'), 'utf-8');
     expect(matched).toBeGreaterThan(0);

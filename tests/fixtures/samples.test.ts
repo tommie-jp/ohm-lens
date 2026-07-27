@@ -5,7 +5,7 @@ import { analyzeRoi } from '../../src/core/pipeline.js';
 import { locateResistor } from '../../src/core/locate.js';
 import { rectify } from '../../src/core/rectify.js';
 import { formatOhms } from '../../src/core/format.js';
-import { hasSamples, loadImage, loadManifest, type SampleEntry } from './loadSample.js';
+import { hasSamples, loadImage, loadManifest, loadPalette, type SampleEntry } from './loadSample.js';
 
 /**
  * sample/ の実写真を通した回帰テスト（Step 0-7）。
@@ -36,6 +36,8 @@ interface Outcome {
   readonly correct: boolean;
 }
 
+const PALETTE = hasSamples() ? loadPalette() : undefined;
+
 async function analyzeSample(entry: SampleEntry): Promise<Outcome> {
   const image = await loadImage(entry.file);
   const box = locateResistor(image);
@@ -44,7 +46,7 @@ async function analyzeSample(entry: SampleEntry): Promise<Outcome> {
   }
 
   const roi = rectify(image, box, { padding: ROI_PADDING, targetHeight: ROI_HEIGHT });
-  const result = analyzeRoi(roi);
+  const result = analyzeRoi(roi, PALETTE === undefined ? {} : { segment: { palette: PALETTE } });
   const ohms = result.reading?.ohms ?? null;
 
   return {

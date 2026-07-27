@@ -2,6 +2,8 @@ import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import sharp from 'sharp';
 import type { RoiImage } from '../../src/core/bands/profile.js';
+import type { BandColor, LabColor } from '../../src/types.js';
+import { DEFAULT_PALETTE, withOverrides, type Palette } from '../../src/core/color/palette.js';
 
 /**
  * sample/ の写真をフィクスチャとして読み込む。
@@ -64,4 +66,18 @@ export async function loadImage(file: string): Promise<RoiImage> {
     height: info.height,
     data: new Uint8ClampedArray(data.buffer, data.byteOffset, data.byteLength),
   };
+}
+
+/**
+ * 学習済みパレットを読み込む。無ければ既定パレット。
+ * 較正（calibrate.test.ts）が sample/palette.json に書き出したものを使う。
+ */
+export function loadPalette(): Palette {
+  const path = join(SAMPLE_DIR, 'palette.json');
+  if (!existsSync(path)) return DEFAULT_PALETTE;
+
+  const parsed = JSON.parse(readFileSync(path, 'utf-8')) as {
+    colors?: Partial<Record<BandColor, LabColor>>;
+  };
+  return withOverrides(DEFAULT_PALETTE, parsed.colors ?? {});
 }

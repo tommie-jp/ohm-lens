@@ -1,6 +1,7 @@
 import type { BandColor, LabColor } from '../../types.js';
 import { deltaE2000Prepared, prepareLab } from '../color/colorSpace.js';
-import { BAND_ENTRIES, BODY_ENTRIES } from '../color/colors.js';
+import { BODY_ENTRIES } from '../color/colors.js';
+import { DEFAULT_PALETTE, type Palette } from '../color/palette.js';
 import { clamp01, normalizedMargin } from '../math.js';
 
 /**
@@ -36,15 +37,21 @@ export interface ClassificationResult {
  * バンドの列数だけ呼ばれるホットパスなので、配列やソートを作らず
  * 上位 2 件をスカラで走査する。上位候補の一覧が要る場合は
  * {@link rankBandColors} を使う。
+ *
+ * @param palette 基準色テーブル。較正結果を差し替えられるよう引数で受ける。
  */
-export function classifyBandColor(lab: LabColor): ClassificationResult {
+export function classifyBandColor(
+  lab: LabColor,
+  palette: Palette = DEFAULT_PALETTE,
+): ClassificationResult {
   const prepared = prepareLab(lab);
+  const entries = palette.entries;
 
-  let bestColor: BandColor = (BAND_ENTRIES[0] as (typeof BAND_ENTRIES)[number]).key;
+  let bestColor: BandColor = (entries[0] as (typeof entries)[number]).key;
   let bestDelta = Number.POSITIVE_INFINITY;
   let secondDelta = Number.POSITIVE_INFINITY;
 
-  for (const entry of BAND_ENTRIES) {
+  for (const entry of entries) {
     const delta = deltaE2000Prepared(prepared, entry.prepared);
     if (delta < bestDelta) {
       secondDelta = bestDelta;
@@ -68,10 +75,14 @@ export function classifyBandColor(lab: LabColor): ClassificationResult {
  * 紛らわしい色（茶/赤、金/黄）では最有力候補だけでなく上位候補と確信度を
  * 併記できるようにするためのもの。ホットパスでは使わない。
  */
-export function rankBandColors(lab: LabColor, limit = 3): ColorCandidate[] {
+export function rankBandColors(
+  lab: LabColor,
+  limit = 3,
+  palette: Palette = DEFAULT_PALETTE,
+): ColorCandidate[] {
   const prepared = prepareLab(lab);
 
-  return BAND_ENTRIES.map((entry) => ({
+  return palette.entries.map((entry) => ({
     color: entry.key,
     deltaE: deltaE2000Prepared(prepared, entry.prepared),
   }))

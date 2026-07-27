@@ -1,5 +1,6 @@
 import type { Band, ProfileSample } from '../../types.js';
 import { classifyBandColor } from './classify.js';
+import { DEFAULT_PALETTE, type Palette } from '../color/palette.js';
 import { identifyBody, splitRuns, type ColorRun } from './runs.js';
 
 export interface SegmentOptions {
@@ -9,6 +10,8 @@ export interface SegmentOptions {
   readonly minBandWidth?: number;
   /** 同じ色のランとみなす ΔE（本体ランをまとめるのに使う） */
   readonly clusterDeltaE?: number;
+  /** バンド色の基準テーブル。較正結果を差し替えられる。 */
+  readonly palette?: Palette;
 }
 
 /**
@@ -39,11 +42,11 @@ export function segmentBands(
   return runs
     .map((run, index) => ({ run, index }))
     .filter(({ index }) => !bodyRuns.has(index))
-    .map(({ run }) => toBand(run));
+    .map(({ run }) => toBand(run, options.palette ?? DEFAULT_PALETTE));
 }
 
-function toBand(run: ColorRun): Band {
-  const classification = classifyBandColor(run.lab);
+function toBand(run: ColorRun, palette: Palette): Band {
+  const classification = classifyBandColor(run.lab, palette);
   return {
     color: classification.color,
     start: run.start,
