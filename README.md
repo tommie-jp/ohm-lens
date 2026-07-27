@@ -37,7 +37,7 @@ getUserMedia
 | ------ | ------ |
 | 映像取得 | WebRTC `getUserMedia` / `requestVideoFrameCallback` |
 | 推論 | [onnxruntime-web](https://onnxruntime.ai/docs/tutorials/web/)（WebGPU / WASM EP） |
-| 古典 CV | [@techstark/opencv-js](https://github.com/TechStark/opencv-js) |
+| 古典 CV | [@techstark/opencv-js](https://github.com/TechStark/opencv-js)（Phase 0 限定。以降は OffscreenCanvas 2D で代替） |
 | モデル学習 | [Ultralytics YOLO](https://docs.ultralytics.com/)（detect / obb） |
 | 色差計算 | [culori](https://culorijs.org/)（Lab / ΔE2000） |
 | トラッキング | 自前 IoU 実装 |

@@ -17,7 +17,12 @@ Web アプリ。**ブラウザ完結（クライアントサイド推論）で�
   決定的アルゴリズムで行う。カラーバンド読み取りまで NN に任せない
 - **物体検出は OBB（回転バウンディングボックス）**。軸平行ボックスでは隣の
   抵抗器やリード線を巻き込んで色帯解析が破綻する
-- **色分類は Lab + ΔE2000**。HSV だけでは茶／赤／橙、金／黄が分離できない
+- **色分類は Lab + ΔE2000 の相対分類**。HSV だけでは茶／赤／橙、金／黄が
+  分離できない。絶対 Lab 値ではなく、フレーム内の基準色（抵抗器の本体色、
+  UI ガイド枠内の白基準）をアンカーにした相対分類を主防御にする
+  （WB ロックは Safari で不可能なため）
+- **OpenCV.js は Phase 0 限定の暫定依存**。Phase 1 以降は回転切り出しを
+  OffscreenCanvas 2D で代替し、依存から外す
 - **色帯解析は元解像度の ROI で行う**。推論用の 640px ダウンスケール画像から
   切り出さない
 - **Phase 0（静止画・OpenCV.js のみ）を飛ばさない**。最初から YOLO を入れると
@@ -25,8 +30,8 @@ Web アプリ。**ブラウザ完結（クライアントサイド推論）で�
 
 ## 実装時の注意
 
-- カメラは `applyConstraints()` で `whiteBalanceMode` / `exposureMode` を
-  `manual` に固定する。オートホワイトバランスが動くと色判定が壊れる
+- `whiteBalanceMode` / `exposureMode` の `manual` 固定は **Chromium 限定の
+  最適化**として扱う（Safari は未対応）。固定できる環境では併用する
 - フレーム同期は `video.requestVideoFrameCallback()` を使う
   （`setInterval` / `requestAnimationFrame` は使わない）
 - 映像座標と Canvas 座標の変換関数は **一箇所にまとめる**。`object-fit: cover`
