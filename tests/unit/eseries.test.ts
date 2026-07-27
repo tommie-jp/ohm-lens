@@ -3,6 +3,8 @@ import {
   E24_VALUES,
   E96_VALUES,
   seriesForTolerance,
+  decadesOutsideCommonRange,
+  seriesRank,
   snapForTolerance,
   snapToSeries,
 } from '../../src/core/value/eseries.js';
@@ -152,5 +154,60 @@ describe('snapForTolerance', () => {
 
     expect(result.ohms).toBeCloseTo(4700, 6);
     expect(result.series).toBe('E24');
+  });
+});
+
+describe('seriesRank', () => {
+  it('E6 の値が最も一般的', () => {
+    for (const value of [1.0, 1.5, 2.2, 3.3, 4.7, 6.8]) {
+      expect(seriesRank(value)).toBe('E6');
+    }
+  });
+
+  it('E12 だけに載る値', () => {
+    for (const value of [1.2, 1.8, 2.7, 3.9, 5.6, 8.2]) {
+      expect(seriesRank(value)).toBe('E12');
+    }
+  });
+
+  it('E24 だけに載る値', () => {
+    for (const value of [1.1, 1.3, 1.6, 2.0, 2.4, 3.0, 3.6, 4.3, 5.1, 6.2, 7.5, 9.1]) {
+      expect(seriesRank(value)).toBe('E24');
+    }
+  });
+
+  it('ディケードが違っても同じ判定', () => {
+    expect(seriesRank(220)).toBe('E6');
+    expect(seriesRank(1_200_000)).toBe('E12');
+    expect(seriesRank(1_000_000)).toBe('E6');
+    expect(seriesRank(1_100_000)).toBe('E24');
+  });
+
+  it('どの系列にも載らない値は null', () => {
+    expect(seriesRank(339)).toBeNull();
+    expect(seriesRank(1.05)).toBeNull();
+  });
+});
+
+describe('decadesOutsideCommonRange', () => {
+  it('普通に売っている範囲なら 0', () => {
+    for (const ohms of [1, 220, 4_700, 1_000_000, 10_000_000]) {
+      expect(decadesOutsideCommonRange(ohms)).toBe(0);
+    }
+  });
+
+  it('範囲より上は桁数ぶん離れる', () => {
+    expect(decadesOutsideCommonRange(100_000_000)).toBeCloseTo(1, 5);
+    expect(decadesOutsideCommonRange(10_000_000_000)).toBeCloseTo(3, 5);
+  });
+
+  it('範囲より下も桁数ぶん離れる', () => {
+    expect(decadesOutsideCommonRange(0.1)).toBeCloseTo(1, 5);
+    expect(decadesOutsideCommonRange(0.01)).toBeCloseTo(2, 5);
+  });
+
+  it('正の有限値でなければ 0', () => {
+    expect(decadesOutsideCommonRange(0)).toBe(0);
+    expect(decadesOutsideCommonRange(Number.NaN)).toBe(0);
   });
 });

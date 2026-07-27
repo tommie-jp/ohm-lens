@@ -97,6 +97,58 @@ export function snapToSeries(ohms: number, series: ESeries): SnapResult {
   return { ohms: snapped, deviation: Math.abs(snapped - ohms) / ohms };
 }
 
+/**
+ * E6 / E12 の値。E24 の部分集合で、市場に出回る数がまるで違う。
+ * E6 は 20% 品、E12 は 10% 品の系列で、5% 品も実際には E12 の値が多い。
+ */
+const E6_VALUES: readonly number[] = [1.0, 1.5, 2.2, 3.3, 4.7, 6.8];
+const E12_VALUES: readonly number[] = [1.0, 1.2, 1.5, 1.8, 2.2, 2.7, 3.3, 3.9, 4.7, 5.6, 6.8, 8.2];
+
+/** 仮数が系列の値と一致するとみなす相対誤差。 */
+const RANK_TOLERANCE = 0.005;
+
+function includesMantissa(values: readonly number[], mantissa: number): boolean {
+  return values.some((value) => Math.abs(value - mantissa) / value < RANK_TOLERANCE);
+}
+
+/**
+ * その抵抗値がどの系列まで遡れるか（最も一般的な系列）を返す。
+ *
+ * E6 ⊂ E12 ⊂ E24 なので、E6 に載る値は E12 にも E24 にも載る。
+ * 「E6 に載る」ほど市場に多い＝読み取り候補として尤もらしい。
+ * どの系列にも載らなければ null。
+ */
+export function seriesRank(ohms: number): 'E6' | 'E12' | 'E24' | null {
+  if (!Number.isFinite(ohms) || ohms <= 0) return null;
+  const mantissa = ohms / 10 ** Math.floor(Math.log10(ohms));
+
+  if (includesMantissa(E6_VALUES, mantissa)) return 'E6';
+  if (includesMantissa(E12_VALUES, mantissa)) return 'E12';
+  if (includesMantissa(E24_VALUES, mantissa)) return 'E24';
+  return null;
+}
+
+/**
+ * 軸形抵抗器として普通に流通する範囲 [Ω]。
+ *
+ * 1Ω 未満は電流検出用のシャント、100MΩ 超は絶縁計測用の特殊品で、
+ * どちらもカラーコードで読む場面にはまず出てこない。読み取り候補が
+ * この外に出たら、色をどこか読み違えている可能性が高い。
+ */
+const COMMON_MIN_OHMS = 1;
+const COMMON_MAX_OHMS = 10_000_000;
+
+/**
+ * 普通に流通する範囲から何桁はみ出しているか。範囲内なら 0。
+ * 桁で測るのは、抵抗値の誤読が倍率バンド 1 本＝1 桁ずつずれるため。
+ */
+export function decadesOutsideCommonRange(ohms: number): number {
+  if (!Number.isFinite(ohms) || ohms <= 0) return 0;
+  if (ohms > COMMON_MAX_OHMS) return Math.log10(ohms / COMMON_MAX_OHMS);
+  if (ohms < COMMON_MIN_OHMS) return Math.log10(COMMON_MIN_OHMS / ohms);
+  return 0;
+}
+
 /** どの系列でスナップしたかを含む結果。 */
 export interface ToleranceSnapResult extends SnapResult {
   readonly series: ESeries;

@@ -10,6 +10,7 @@ import {
   tempCoefficientOf,
   toleranceOf,
 } from './codeTable.js';
+import { decadesOutsideCommonRange, seriesRank } from './eseries.js';
 import { decodeBandSequence, type DecodedValue } from './decode.js';
 
 /**
@@ -76,6 +77,33 @@ const DROP_COST_SCALE = 30;
 
 /** E 系列スナップ偏差のコスト係数。deviation / SNAP_LIMIT に掛かる。 */
 const SNAP_COST_SCALE = 12;
+
+/**
+ * 系列の一般性による加点。E6 ⊂ E12 ⊂ E24 で、市場に出回る数がまるで違う。
+ *
+ * 色が紛らわしくて 2 通りに読める（1MΩ と 1.1MΩ、220Ω と 1.2kΩ）とき、
+ * どちらも E24 に載るのでスナップ偏差では差がつかない。実物は E6・E12 の
+ * 値が圧倒的に多いので、そちらを優先する。
+ */
+const SERIES_RANK_COST: Record<'E6' | 'E12' | 'E24', number> = { E6: 0, E12: 1, E24: 2 };
+
+/** 系列に載らない値の加点（E24 よりさらに不自然）。 */
+const OFF_SERIES_COST = 3;
+
+/** 系列の一般性のコスト係数。 */
+const SERIES_RANK_SCALE = 1.5;
+
+/**
+ * 流通範囲から外れた値の 1 桁あたりの加点。
+ *
+ * 誤読の多くは「白を倍率と読んで ×10^9」のように、桁が跳ねた形で出る
+ * （実測では 390GΩ・82GΩ・33GΩ・100MΩ）。軸形抵抗器の実物は 1Ω〜10MΩ に
+ * 収まるので、そこから離れるほど不自然とみなす。
+ */
+const OUT_OF_RANGE_SCALE = 1.2;
+
+/** 流通範囲の加点の上限（離れすぎても頭打ちにする）。 */
+const MAX_OUT_OF_RANGE_COST = 6;
 
 /** スナップ偏差がこの値で適合スコアが尽きる（decode.ts と同じ水準）。 */
 const SNAP_DEVIATION_LIMIT = 0.02;
@@ -229,10 +257,17 @@ export function jointReadResistor(
           if (decoded === null) continue;
           const snapCost =
             SNAP_COST_SCALE * Math.min(2, decoded.snapDeviation / SNAP_DEVIATION_LIMIT);
+          const rank = seriesRank(decoded.ohms);
+          const rankCost =
+            SERIES_RANK_SCALE * (rank === null ? OFF_SERIES_COST : SERIES_RANK_COST[rank]);
+          const rangeCost = Math.min(
+            MAX_OUT_OF_RANGE_COST,
+            OUT_OF_RANGE_SCALE * decadesOutsideCommonRange(decoded.ohms),
+          );
           consider({
             decoded,
             direction,
-            cost: meanDeltaE + dropCost + snapCost,
+            cost: meanDeltaE + dropCost + snapCost + rankCost + rangeCost,
             meanDeltaE,
             keptIndices: [...keptIndices],
             orientedColors: [...oriented],
