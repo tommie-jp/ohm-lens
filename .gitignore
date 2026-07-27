@@ -1,0 +1,20 @@
+# Claude Code（個人用のローカル設定。コミットしない）
+.claude/settings.local.json
+
+# ローカル専用メモ（ドキュメント本体ではない）
+*-ignore.md
+
+# OS / エディタが生成するファイル
+.DS_Store
+Thumbs.db
+*.swp
+*.swo
+*.bak
+
+# Windows のダウンロード時メタデータ（WSL で混入する孤立ファイル）
+*:Zone.Identifier
+
+# EDA ツールのバックアップ・自動生成物
+*-backups/
+*.kicad_prl
+fp-info-cache
