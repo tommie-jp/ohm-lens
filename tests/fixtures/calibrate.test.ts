@@ -32,8 +32,8 @@ const MAX_ALIGN_COST = 25;
 
 const ROI_HEIGHT = 40;
 const ROI_PADDING = 0.06;
-const EDGE_DELTA_E = 4;
-const CLUSTER_DELTA_E = 4;
+const EDGE_DELTA_E = 9;
+const CLUSTER_DELTA_E = 18;
 const MIN_RUN_LENGTH = 3;
 /** この件数に満たない色は学習結果として採用しない（既定値のまま残す）。 */
 const MIN_SAMPLES_PER_COLOR = 3;

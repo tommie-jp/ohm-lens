@@ -1,16 +1,25 @@
 import type { LabColor, ProfileSample } from '../../types.js';
-import { deltaE2000 } from '../color/colorSpace.js';
+import { deltaE76 } from '../color/colorSpace.js';
 
 /**
  * 1D カラープロファイルを「色が続く区間（ラン）」に分割する。
  *
  * **分類より先にランを切る**のが要点。画素ごとに最近傍色へ分類してから
  * 同じ色をまとめると、茶/赤のような紛らわしい色でバンド内の分類が揺れ、
- * 1 本のバンドが細切れになって消えてしまう。隣接サンプル間の色差だけで
- * 切れ目を決めれば、分類の曖昧さはランの中に閉じ込められる。
+ * 1 本のバンドが細切れになって消えてしまう。色差だけで切れ目を決めれば、
+ * 分類の曖昧さはランの中に閉じ込められる。
+ *
+ * 切れ目の判定は「隣接サンプルとの差」ではなく「**いま伸ばしているランの
+ * 平均色との差**」で行う。バンドの境界はぼけているため、隣接差分では
+ * どのステップも閾値に届かず、境界をまたいで 1 本に融合してしまう。
+ * ラン平均と比べれば、ぼけの途中で累積のずれが閾値を超えて切れる。
  *
  * 本体色も「基準テーブルとの絶対距離」ではなく「最も面積の大きいラン群」
  * として決めるので、ベージュでも水色でも緑でも同じ仕組みで扱える。
+ *
+ * 距離は **CIE76（Lab のユークリッド距離）** を使う。ΔE2000 は高彩度域の
+ * 差を圧縮するため、本体ベージュと金バンドのように彩度だけが違う組を
+ * 「同じ色」と判定してしまい、バンドが本体に吸収されてしまう。
  */
 
 export interface ColorRun {
@@ -38,11 +47,11 @@ export interface BodyIdentification {
   readonly extent: { readonly start: number; readonly end: number };
 }
 
-const DEFAULT_EDGE_DELTA_E = 6;
+const DEFAULT_EDGE_DELTA_E = 9;
 const DEFAULT_MIN_RUN_LENGTH = 2;
 
 /** 同じ色のランとみなす ΔE。本体ランをまとめるのに使う。 */
-const DEFAULT_CLUSTER_DELTA_E = 8;
+const DEFAULT_CLUSTER_DELTA_E = 18;
 
 function medianLab(samples: readonly ProfileSample[]): LabColor {
   const pick = (select: (sample: ProfileSample) => number): number => {
@@ -64,26 +73,36 @@ export function splitRuns(
   if (profile.length === 0) return [];
 
   const runs: ColorRun[] = [];
-  let current: ProfileSample[] = [profile[0] as ProfileSample];
+  let current: ProfileSample[] = [];
+  // 伸ばしているランの平均色。逐次更新して切れ目の判定に使う。
+  let sum = { l: 0, a: 0, b: 0 };
 
-  const flush = (): void => {
-    if (current.length < minRunLength) {
-      current = [];
-      return;
-    }
-    runs.push({
-      start: (current[0] as ProfileSample).x,
-      end: (current[current.length - 1] as ProfileSample).x + 1,
-      lab: medianLab(current),
-    });
-    current = [];
+  const mean = (): LabColor => ({
+    l: sum.l / current.length,
+    a: sum.a / current.length,
+    b: sum.b / current.length,
+  });
+
+  const push = (sample: ProfileSample): void => {
+    current.push(sample);
+    sum = { l: sum.l + sample.lab.l, a: sum.a + sample.lab.a, b: sum.b + sample.lab.b };
   };
 
-  for (let index = 1; index < profile.length; index += 1) {
-    const previous = profile[index - 1] as ProfileSample;
-    const sample = profile[index] as ProfileSample;
-    if (deltaE2000(previous.lab, sample.lab) > edgeDeltaE) flush();
-    current.push(sample);
+  const flush = (): void => {
+    if (current.length >= minRunLength) {
+      runs.push({
+        start: (current[0] as ProfileSample).x,
+        end: (current[current.length - 1] as ProfileSample).x + 1,
+        lab: medianLab(current),
+      });
+    }
+    current = [];
+    sum = { l: 0, a: 0, b: 0 };
+  };
+
+  for (const sample of profile) {
+    if (current.length > 0 && deltaE76(sample.lab, mean()) > edgeDeltaE) flush();
+    push(sample);
   }
   flush();
 
@@ -106,7 +125,7 @@ export function identifyBody(
   const clusters: number[][] = [];
   runs.forEach((run, index) => {
     const match = clusters.find((cluster) =>
-      deltaE2000(run.lab, (runs[cluster[0] as number] as ColorRun).lab) <= clusterDeltaE,
+      deltaE76(run.lab, (runs[cluster[0] as number] as ColorRun).lab) <= clusterDeltaE,
     );
     if (match === undefined) clusters.push([index]);
     else match.push(index);

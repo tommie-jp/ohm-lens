@@ -14,10 +14,10 @@ import { hasSamples, loadImage, loadManifest, type SampleEntry } from './loadSam
 
 const REPORT_PATH = join(import.meta.dirname, '../../sweep-report.txt');
 
-const EDGE_DELTA_E = [4, 6, 8];
-const CLUSTER_DELTA_E = [6, 8, 12];
-const MIN_BAND_WIDTH = [3, 5, 8];
-const ROI_WIDTHS = [160, 240, 360];
+const EDGE_DELTA_E = [6, 9, 12, 16, 20];
+const CLUSTER_DELTA_E = [10, 14, 18, 24, 30];
+const MIN_BAND_WIDTH = [2, 3, 5];
+const ROI_HEIGHTS = [40];
 const ROI_PADDING = 0.06;
 
 describe.skipIf(!hasSamples())('閾値の掃引', () => {
@@ -30,8 +30,8 @@ describe.skipIf(!hasSamples())('閾値の掃引', () => {
       const image = await loadImage(entry.file);
       const box = locateResistor(image);
       if (box === null) continue;
-      for (const width of ROI_WIDTHS) {
-        rois.push({ entry, roi: rectify(image, box, { padding: ROI_PADDING, targetWidth: width }), width });
+      for (const height of ROI_HEIGHTS) {
+        rois.push({ entry, roi: rectify(image, box, { padding: ROI_PADDING, targetHeight: height }), width: height });
       }
     }
 
@@ -39,7 +39,7 @@ describe.skipIf(!hasSamples())('閾値の掃引', () => {
     lines.push('ROI幅  edgeΔE  clusterΔE  minWidth  正解  デコード成功');
 
     let best = { edgeDeltaE: 0, clusterDeltaE: 0, minBandWidth: 0, roiWidth: 0, correct: -1 };
-    for (const roiWidth of ROI_WIDTHS) {
+    for (const roiWidth of ROI_HEIGHTS) {
     for (const edgeDeltaE of EDGE_DELTA_E) {
       for (const clusterDeltaE of CLUSTER_DELTA_E) {
       for (const minBandWidth of MIN_BAND_WIDTH) {

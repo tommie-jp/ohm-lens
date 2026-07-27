@@ -71,6 +71,23 @@ export function deltaE2000(a: LabColor, b: LabColor): number {
   return difference(prepareLab(a), prepareLab(b));
 }
 
+/**
+ * CIE76 色差（Lab 空間のユークリッド距離）。
+ *
+ * ΔE2000 は「知覚的に同じ色に見えるか」を測る指標で、**高彩度域の差を
+ * 大きく圧縮する**。そのため「本体ベージュと金バンド」のように彩度だけが
+ * 違う組を近いと判定してしまい、バンドが本体に吸収される。
+ *
+ * 「同じ色の区間か、別の色か」を切り分ける用途では圧縮しない CIE76 が適する。
+ * 分類（どの基準色に最も近いか）には知覚的に均一な ΔE2000 を使う。
+ */
+export function deltaE76(a: LabColor, b: LabColor): number {
+  const dl = a.l - b.l;
+  const da = a.a - b.a;
+  const db = a.b - b.b;
+  return Math.sqrt(dl * dl + da * da + db * db);
+}
+
 /** 前処理済みの色どうしの CIEDE2000 色差。ホットパス用。 */
 export function deltaE2000Prepared(a: PreparedLab, b: PreparedLab): number {
   return difference(a, b);
