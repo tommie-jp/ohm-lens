@@ -19,7 +19,24 @@ interface Args {
   readonly filter: string | null;
   readonly clean: boolean;
   readonly japanese: boolean;
+  readonly help: boolean;
 }
+
+const USAGE = `抵抗器の検出をバッチでデバッグします。
+
+  使い方: npx tsx scripts/detect.ts [フィルタ] [オプション]
+          （通常は ./doDetect.sh から呼ばれます）
+
+  引数:
+    フィルタ            ファイル名に含まれる文字列で絞り込む（例: 11, kohm）
+
+  オプション:
+    -h, --help          この説明を表示して終了する
+    --clean             実行前に出力ディレクトリを空にする
+    --ascii             色名を英字 3 文字で描く
+    --in <ディレクトリ>    入力元（既定: ../sample）
+    --out <ディレクトリ>   出力先（既定: ../sample-detect）
+`;
 
 /** 値を取るオプション。位置引数の判定でこれらの値を除外する。 */
 const VALUE_FLAGS = ['in', 'out'] as const;
@@ -41,9 +58,9 @@ function parseArgs(argv: readonly string[]): Args {
   }
 
   // 残った非オプション引数の最後をフィルタとして使う。
-  // --out の値などを拾わないよう、消費済みの位置は除外する。
+  // --out の値や -h を拾わないよう、消費済みの位置とハイフン始まりは除外する。
   const positional = argv.filter(
-    (arg, index) => !consumed.has(index) && !arg.startsWith('--'),
+    (arg, index) => !consumed.has(index) && !arg.startsWith('-'),
   );
 
   return {
@@ -52,6 +69,7 @@ function parseArgs(argv: readonly string[]): Args {
     filter: positional.length > 0 ? (positional[positional.length - 1] as string) : null,
     clean: argv.includes('--clean'),
     japanese: !argv.includes('--ascii'),
+    help: argv.includes('-h') || argv.includes('--help'),
   };
 }
 
@@ -84,6 +102,11 @@ function loadPalette(inDir: string): Palette {
 
 async function main(): Promise<void> {
   const args = parseArgs(process.argv.slice(2));
+
+  if (args.help) {
+    console.log(USAGE);
+    return;
+  }
 
   if (!existsSync(args.inDir)) {
     console.error(`入力ディレクトリがありません: ${args.inDir}`);

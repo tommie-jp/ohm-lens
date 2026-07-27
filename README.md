@@ -66,6 +66,7 @@ HEIC のデコーダ（libheif の WASM、約 3MB）は Chrome / Firefox が HEI
 ## 検出のデバッグ（doDetect.sh）
 
 ```bash
+./doDetect.sh -h           # 説明を表示（オプションと出力内容の一覧）
 ./doDetect.sh              # sample/ 全件 → sample-detect/
 ./doDetect.sh 11           # ファイル名に "11" を含むものだけ
 ./doDetect.sh --clean      # 出力先を空にしてから実行
