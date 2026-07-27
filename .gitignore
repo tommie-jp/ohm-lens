@@ -42,3 +42,4 @@ sample-report.txt
 diagnose-report.txt
 sweep-report.txt
 calibration.txt
+debug-out/

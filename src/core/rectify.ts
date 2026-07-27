@@ -1,6 +1,7 @@
 import type { RoiImage } from './bands/profile.js';
 import type { OrientedBox } from './locate.js';
 import { clamp } from './math.js';
+import { roiGeometry } from './roiMapping.js';
 
 /**
  * 回転バウンディングボックスに沿って画像を切り出し、長軸を水平に揃える。
@@ -26,14 +27,6 @@ export interface RectifyOptions {
 }
 
 const CHANNELS = 4;
-const DEFAULT_PADDING = 0;
-
-/** 出力の拡縮率。幅指定が優先、次に高さ、どちらも無ければ等倍。 */
-function resolveScale(options: RectifyOptions, length: number, thickness: number): number {
-  if (options.targetWidth !== undefined) return Math.max(1, options.targetWidth) / length;
-  if (options.targetHeight !== undefined) return Math.max(1, options.targetHeight) / thickness;
-  return 1;
-}
 
 /**
  * 双一次補間で 1 画素を取り出す。画像の外側は端の画素で埋める
@@ -74,17 +67,9 @@ function sampleBilinear(image: RoiImage, x: number, y: number, out: Uint8Clamped
  * 「長軸は X 方向」という不変条件を満たす）。
  */
 export function rectify(image: RoiImage, box: OrientedBox, options: RectifyOptions = {}): RoiImage {
-  const padding = options.padding ?? DEFAULT_PADDING;
-  const sourceLength = Math.max(1, box.length * (1 + padding * 2));
-  const sourceThickness = Math.max(1, box.thickness * (1 + padding * 2));
-
-  const scale = resolveScale(options, sourceLength, sourceThickness);
-  const outputWidth = Math.max(1, Math.round(sourceLength * scale));
-  const outputHeight = Math.max(1, Math.round(sourceThickness * scale));
-
-  const rad = (box.angleDeg * Math.PI) / 180;
-  const cos = Math.cos(rad);
-  const sin = Math.sin(rad);
+  // 寸法と対応関係は roiMapping に集約してある（逆変換と式を共有するため）
+  const { width: outputWidth, height: outputHeight, scale, sourceLength, sourceThickness, cos, sin } =
+    roiGeometry(box, options);
 
   const data = new Uint8ClampedArray(outputWidth * outputHeight * CHANNELS);
 

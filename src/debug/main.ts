@@ -20,6 +20,7 @@ import { createSampleCanvas } from './sample.js';
 import { drawProfile } from './profileView.js';
 import { context2d } from './canvas.js';
 import { decodeImageFile } from './decodeImage.js';
+import { drawDetectionOverlay } from './detectionOverlay.js';
 import { SUPPORTED_ACCEPT } from '../core/imageFormat.js';
 import { listCameras, pickPreferredCamera, startCamera, type CameraSession } from './camera.js';
 import { describeCameraError } from './cameraSupport.js';
@@ -179,43 +180,13 @@ function redrawSource(): void {
   const context = context2d(elements.sourceCanvas);
   context.drawImage(source, 0, 0);
 
-  if (elements.autoToggle.checked) {
-    if (detectedBox !== null) drawDetectedBox(context, detectedBox);
-    return;
-  }
+  // 自動検出時の枠は、バンドが確定してから analyzeSelection が描く
+  if (elements.autoToggle.checked) return;
   if (selection === null) return;
 
   context.strokeStyle = '#00b0ff';
   context.lineWidth = 2;
   context.strokeRect(selection.x, selection.y, selection.width, selection.height);
-}
-
-/** 自動検出した回転ボックスを元画像に重ねて描く。 */
-function drawDetectedBox(context: CanvasRenderingContext2D, box: OrientedBox): void {
-  const rad = (box.angleDeg * Math.PI) / 180;
-  const cos = Math.cos(rad);
-  const sin = Math.sin(rad);
-  const halfLength = box.length / 2;
-  const halfThickness = box.thickness / 2;
-
-  const corners: readonly (readonly [number, number])[] = [
-    [-halfLength, -halfThickness],
-    [halfLength, -halfThickness],
-    [halfLength, halfThickness],
-    [-halfLength, halfThickness],
-  ];
-
-  context.strokeStyle = '#ff4081';
-  context.lineWidth = Math.max(2, Math.round(box.thickness / 12));
-  context.beginPath();
-  corners.forEach(([along, across], index) => {
-    const x = box.centerX + along * cos - across * sin;
-    const y = box.centerY + along * sin + across * cos;
-    if (index === 0) context.moveTo(x, y);
-    else context.lineTo(x, y);
-  });
-  context.closePath();
-  context.stroke();
 }
 
 /** テストのフィクスチャハーネスと揃えた ROI の切り出し条件。 */
@@ -285,6 +256,24 @@ function analyzeSelection(): void {
   drawProfile(elements.profileCanvas, result.profile, result.bands);
   renderBands(result.bands);
   renderReading(result);
+  drawOverlay(result);
+}
+
+/**
+ * 検出結果を元画像に焼き込む。
+ *
+ * 「どこを抵抗器と見なし、どの帯を何色と読んだか」を写真の上で確認できる
+ * ようにする。バンドの座標は ROI 列番号なので、`roiMapping` の逆変換で
+ * 元画像に戻してから描く。
+ */
+function drawOverlay(result: AnalysisResult): void {
+  if (detectedBox === null) return;
+
+  // extent でスライスした場合、Band の列番号は ROI 基準のままなので
+  // そのまま逆変換できる（roiMapping のテストで固定済み）
+  drawDetectionOverlay(context2d(elements.sourceCanvas), detectedBox, result.bands, {
+    rectify: { padding: ROI_PADDING, targetHeight: ROI_HEIGHT },
+  });
 }
 
 function renderBands(bands: readonly Band[]): void {

@@ -74,3 +74,41 @@ export const BAND_ENTRIES: readonly ReferenceEntry<BandColor>[] = toEntries(BAND
 
 /** 本体色の基準（前処理済み）。 */
 export const BODY_ENTRIES: readonly ReferenceEntry<BodyColor>[] = toEntries(BODY_REFERENCE_COLORS);
+
+/** バンド色の日本語 1 文字表記。写真への焼き込み表示に使う。 */
+export const BAND_COLOR_JA: Record<BandColor, string> = {
+  black: '黒',
+  brown: '茶',
+  red: '赤',
+  orange: '橙',
+  yellow: '黄',
+  green: '緑',
+  blue: '青',
+  violet: '紫',
+  grey: '灰',
+  white: '白',
+  gold: '金',
+  silver: '銀',
+};
+
+/** 焼き込み表示のフォールバック（日本語フォントが無い環境向け）。 */
+export const BAND_COLOR_ABBR: Record<BandColor, string> = {
+  black: 'BLK',
+  brown: 'BRN',
+  red: 'RED',
+  orange: 'ORG',
+  yellow: 'YEL',
+  green: 'GRN',
+  blue: 'BLU',
+  violet: 'VIO',
+  grey: 'GRY',
+  white: 'WHT',
+  gold: 'GLD',
+  silver: 'SLV',
+};
+
+/** CSS で使える色文字列（スウォッチ描画用）。 */
+export function bandColorCss(color: BandColor): string {
+  const [r, g, b] = BAND_SRGB[color];
+  return `rgb(${r} ${g} ${b})`;
+}
