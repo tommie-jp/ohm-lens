@@ -6,6 +6,7 @@ import { locateResistor } from '../../src/core/locate.js';
 import { rectify } from '../../src/core/rectify.js';
 import { identifyBody, splitRuns } from '../../src/core/bands/runs.js';
 import { alignRunsToBands } from '../../src/core/bands/align.js';
+import { expectedSequences } from '../../src/core/learning.js';
 import { buildBodyAnchorAdaptation } from '../../src/core/color/anchor.js';
 import { adaptToAnchor } from '../../src/core/color/whiteBalance.js';
 import { labToRgb } from '../../src/core/color/colorSpace.js';
@@ -41,13 +42,6 @@ const MIN_SAMPLES_PER_COLOR = 3;
 const DIGITS: BandColor[] = [
   'black', 'brown', 'red', 'orange', 'yellow', 'green', 'blue', 'violet', 'grey', 'white',
 ];
-const MULTIPLIER_BY_EXPONENT: Record<number, BandColor> = {
-  [-2]: 'silver', [-1]: 'gold', 0: 'black', 1: 'brown', 2: 'red', 3: 'orange',
-  4: 'yellow', 5: 'green', 6: 'blue', 7: 'violet', 8: 'grey', 9: 'white',
-};
-const TOLERANCE_COLOR: Record<number, BandColor> = {
-  0.1: 'violet', 0.5: 'green', 1: 'brown', 2: 'red', 5: 'gold', 10: 'silver',
-};
 
 /** 人手による修正ラベル（ファイル名 → 正しいバンド列）。 */
 function loadLabels(): Record<string, BandColor[]> {
@@ -55,33 +49,12 @@ function loadLabels(): Record<string, BandColor[]> {
   return JSON.parse(readFileSync(LABELS_PATH, 'utf-8')) as Record<string, BandColor[]>;
 }
 
-/** 抵抗値と許容差から、あり得るバンド列を列挙する（2桁=4本 / 3桁=5本）。 */
+/** あり得るバンド列。人手ラベル > 実測バンド列 > 値からの逆算。 */
 function candidateSequences(entry: SampleEntry, labels: Record<string, BandColor[]>): BandColor[][] {
   const manual = labels[entry.file];
   if (manual) return [manual];
   if (entry.bands) return [entry.bands as BandColor[]];
-
-  const sequences: BandColor[][] = [];
-  for (const digits of [2, 3]) {
-    for (let exponent = -2; exponent <= 9; exponent += 1) {
-      const significand = entry.ohms / 10 ** exponent;
-      if (Math.abs(significand - Math.round(significand)) > 1e-9) continue;
-      const rounded = Math.round(significand);
-      if (rounded < 10 ** (digits - 1) || rounded >= 10 ** digits) continue;
-      const multiplier = MULTIPLIER_BY_EXPONENT[exponent];
-      if (multiplier === undefined) continue;
-
-      const base = [...String(rounded)].map((d) => DIGITS[Number(d)] as BandColor);
-      base.push(multiplier);
-      if (entry.tolerance !== null) {
-        const tolerance = TOLERANCE_COLOR[entry.tolerance];
-        if (tolerance === undefined) continue;
-        base.push(tolerance);
-      }
-      sequences.push(base);
-    }
-  }
-  return sequences;
+  return expectedSequences(entry.ohms, entry.tolerance);
 }
 
 interface Run {

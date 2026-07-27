@@ -86,7 +86,40 @@
       </section>
 
       <section>
-        <h2>5. 正解ラベル（学習用）</h2>
+        <h2>5. 値で学習（カメラ・画像共通）</h2>
+        <p class="hint">
+          映っている抵抗の<strong>正解値</strong>を入力して「学習」を押すと、
+          値から逆算したバンド列を検出結果に対応付け、基準色を実写に合わせて
+          較正します。色名を選ぶ必要はありません。
+        </p>
+        <div class="controls">
+          <label>
+            値
+            <input type="text" id="learn-value" size="10" placeholder="4.7k" />
+          </label>
+          <label>
+            許容差
+            <select id="learn-tolerance">
+              <option value="5" selected>±5%（金）</option>
+              <option value="1">±1%（茶）</option>
+              <option value="2">±2%（赤）</option>
+              <option value="10">±10%（銀）</option>
+              <option value="0.5">±0.5%（緑）</option>
+              <option value="none">なし</option>
+            </select>
+          </label>
+          <button type="button" id="learn-button">この値で学習</button>
+          <span class="hint" id="learn-status"></span>
+        </div>
+        <p class="hint" id="learn-counts"></p>
+        <div class="controls">
+          <button type="button" id="learn-export">学習結果をコピー（palette.json 用）</button>
+          <button type="button" id="learn-clear">学習をリセット</button>
+        </div>
+      </section>
+
+      <section>
+        <h2>6. 正解ラベル（バンド列を直す場合）</h2>
         <div class="controls">
           <label>
             ファイル名
@@ -106,7 +139,7 @@
       </section>
 
       <section>
-        <h2>6. 読み取り結果</h2>
+        <h2>7. 読み取り結果</h2>
         <output id="reading" class="reading">?</output>
         <dl id="reading-detail" class="detail"></dl>
       </section>

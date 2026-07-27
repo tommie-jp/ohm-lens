@@ -4,6 +4,14 @@ import { rectify } from '../core/rectify.js';
 import type { RoiImage } from '../core/bands/profile.js';
 import { withOverrides, DEFAULT_PALETTE, type Palette } from '../core/color/palette.js';
 import { formatLabels, loadLabels, saveLabels, type LabelMap } from './labelStore.js';
+import {
+  addObservations,
+  matchRunsToValue,
+  paletteOverrides,
+  type Observations,
+} from '../core/learning.js';
+import { parseOhms } from '../core/value/parseOhms.js';
+import { clearObservations, loadObservations, saveObservations } from './learnStore.js';
 import { formatOhms, formatReading, MIN_REPORTABLE_CONFIDENCE } from '../core/format.js';
 import { clamp } from '../core/math.js';
 import type { Band, BandColor, LabColor } from '../types.js';
@@ -54,6 +62,13 @@ const elements = {
   captureButton: requireElement<HTMLButtonElement>('#capture-button'),
   cameraSelect: requireElement<HTMLSelectElement>('#camera-select'),
   cameraStatus: requireElement<HTMLSpanElement>('#camera-status'),
+  learnValue: requireElement<HTMLInputElement>('#learn-value'),
+  learnTolerance: requireElement<HTMLSelectElement>('#learn-tolerance'),
+  learnButton: requireElement<HTMLButtonElement>('#learn-button'),
+  learnStatus: requireElement<HTMLSpanElement>('#learn-status'),
+  learnCounts: requireElement<HTMLParagraphElement>('#learn-counts'),
+  learnExport: requireElement<HTMLButtonElement>('#learn-export'),
+  learnClear: requireElement<HTMLButtonElement>('#learn-clear'),
 };
 
 /** 選択肢に出すバンド色。 */
@@ -70,6 +85,30 @@ let detectedBox: OrientedBox | null = null;
 let palette: Palette | null = null;
 let savedLabels: LabelMap = loadLabels();
 let camera: CameraSession | null = null;
+let observations: Observations = loadObservations();
+let lastResult: AnalysisResult | null = null;
+
+/** 学習に使うには対応付けコストがこの水準以下であること。 */
+const MAX_LEARN_COST = 25;
+
+/**
+ * 現在有効なパレット。サーバの学習結果に、この場で学習した上書きを重ねる。
+ */
+function activePalette(): Palette | null {
+  const learned = paletteOverrides(observations);
+  const base = palette ?? DEFAULT_PALETTE;
+  if (Object.keys(learned).length === 0) return palette;
+  return withOverrides(base, learned);
+}
+
+/** 学習した色ごとの件数を表示する。 */
+function renderLearnCounts(): void {
+  const entries = Object.entries(observations)
+    .filter(([, samples]) => (samples?.length ?? 0) > 0)
+    .map(([color, samples]) => `${color} ${samples?.length ?? 0}`);
+  elements.learnCounts.textContent =
+    entries.length === 0 ? '学習データ: なし' : `学習データ: ${entries.join(' / ')}`;
+}
 let selection: Rect | null = null;
 let dragStart: { x: number; y: number } | null = null;
 
@@ -208,10 +247,12 @@ function analyzeSelection(): void {
   imageData.data.set(roi.data);
   roiContext.putImageData(imageData, 0, 0);
 
+  const effective = activePalette();
   const result = analyzeRoi(roi, {
     adaptWhiteBalance: elements.adaptToggle.checked,
-    ...(palette === null ? {} : { segment: { palette } }),
+    ...(effective === null ? {} : { segment: { palette: effective } }),
   });
+  lastResult = result;
 
   drawProfile(elements.profileCanvas, result.profile, result.bands);
   renderBands(result.bands);
@@ -422,6 +463,77 @@ async function beginCamera(deviceId?: string): Promise<void> {
   await refreshCameraList();
 }
 
+function learnFromCurrent(): void {
+  if (lastResult === null || lastResult.runs.length === 0) {
+    elements.learnStatus.textContent = '先に抵抗を検出してください';
+    return;
+  }
+
+  const ohms = parseOhms(elements.learnValue.value);
+  if (ohms === null) {
+    elements.learnStatus.textContent = '値を解釈できません（例: 4.7k, 220, 1M）';
+    return;
+  }
+  const toleranceRaw = elements.learnTolerance.value;
+  const tolerance = toleranceRaw === 'none' ? null : Number.parseFloat(toleranceRaw);
+
+  const match = matchRunsToValue(
+    lastResult.runs.map((run) => ({ lab: run.lab, start: run.start, end: run.end })),
+    ohms,
+    tolerance,
+    activePalette() ?? DEFAULT_PALETTE,
+  );
+  if (match === null) {
+    elements.learnStatus.textContent =
+      'この値のバンド列と対応付けできませんでした（バンド数を確認してください）';
+    return;
+  }
+  if (match.cost > MAX_LEARN_COST) {
+    elements.learnStatus.textContent =
+      `対応付けの確度が低いため学習しません（コスト ${match.cost.toFixed(1)}）。映りを変えて再試行してください`;
+    return;
+  }
+
+  observations = addObservations(observations, match.assignments);
+  saveObservations(observations);
+  const note = match.toleranceObserved ? '' : '（許容差バンドは検出できず、数字・倍率のみ）';
+  elements.learnStatus.textContent =
+    `学習しました: ${match.sequence.join('-')}${note}`;
+  renderLearnCounts();
+  analyzeSelection(); // 学習直後のパレットで読み直す
+}
+
+elements.learnButton.addEventListener('click', learnFromCurrent);
+
+elements.learnValue.addEventListener('keydown', (event) => {
+  if (event.key === 'Enter') learnFromCurrent();
+});
+
+elements.learnExport.addEventListener('click', () => {
+  const learned = paletteOverrides(observations);
+  const text = JSON.stringify(
+    { generatedFrom: 'browser learning', colors: learned },
+    null,
+    2,
+  );
+  navigator.clipboard.writeText(text).then(
+    () => {
+      elements.learnStatus.textContent = 'palette.json 用の JSON をコピーしました';
+    },
+    () => {
+      elements.learnStatus.textContent = 'コピーできませんでした';
+    },
+  );
+});
+
+elements.learnClear.addEventListener('click', () => {
+  observations = {};
+  clearObservations();
+  renderLearnCounts();
+  elements.learnStatus.textContent = '学習データを消去しました';
+  analyzeSelection();
+});
+
 elements.cameraButton.addEventListener('click', () => {
   if (camera !== null) {
     stopCamera();
@@ -517,3 +629,4 @@ elements.sourceCanvas.addEventListener('pointerup', (event) => {
 
 void loadPaletteFromServer();
 renderLabelJson();
+renderLearnCounts();

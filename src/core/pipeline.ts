@@ -1,6 +1,7 @@
 import type { Band, LabColor, ProfileSample, ResistorReading } from '../types.js';
 import { extractProfile, type ProfileOptions, type RoiImage } from './bands/profile.js';
 import { bandRuns, segmentBands, type SegmentOptions } from './bands/segment.js';
+import type { ColorRun } from './bands/runs.js';
 import { bodyExtent, type BodyExtent, type BodyExtentOptions } from './bands/extent.js';
 import { normalizeLightness, type NormalizeOptions } from './bands/normalize.js';
 import { readResistor } from './value/decode.js';
@@ -50,6 +51,8 @@ export interface AnalysisResult {
   /** 本体が占める範囲。特定できなければ null。 */
   readonly extent: BodyExtent | null;
   readonly bands: readonly Band[];
+  /** 本体を除いたバンド候補のラン（分類前の Lab つき）。値からの学習に使う。 */
+  readonly runs: readonly ColorRun[];
   readonly reading: ResistorReading | null;
   /** 補正に使った観測アンカー色。補正しなかった場合は null。 */
   readonly anchor: LabColor | null;
@@ -100,5 +103,5 @@ export function analyzeRoi(image: RoiImage, options: AnalyzeOptions = {}): Analy
     jointReadResistor(runs, segmentOptions.palette === undefined ? {} : { palette: segmentOptions.palette }) ??
     (bands.length === 0 ? null : readResistor(bands, roiLength));
 
-  return { profile, extent, bands, reading, anchor: refined?.anchor ?? coarse?.anchor ?? null };
+  return { profile, extent, bands, runs, reading, anchor: refined?.anchor ?? coarse?.anchor ?? null };
 }
