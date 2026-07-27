@@ -25,6 +25,8 @@ function profileOf(spec: readonly [[number, number, number] | null, number][]): 
 
 const RED: [number, number, number] = [200, 30, 30];
 const VIOLET: [number, number, number] = [120, 70, 160];
+const GREEN: [number, number, number] = [40, 130, 70];
+const BLUE: [number, number, number] = [40, 80, 170];
 const YELLOW: [number, number, number] = [235, 210, 50];
 const GOLD: [number, number, number] = [200, 160, 50];
 
@@ -93,21 +95,80 @@ describe('segmentBands', () => {
     expect(segmentBands([])).toEqual([]);
   });
 
-  it('端に接したバンドも抽出できる', () => {
-    // Arrange: 先頭から本体色を挟まずにバンドが始まる
+  it('解析範囲の端に接したランはバンドにしない', () => {
+    // Arrange: 先頭と末尾に本体色を挟まずに色が付いている。
+    // 解析範囲は検出した本体そのものなので、バンドの外側には必ず地の色がある。
+    // 端から始まる色は本体の肩の照り返しか、はみ出した背景。
     const profile = profileOf([
       [RED, 5],
-      [null, 10],
+      [null, 8],
       [VIOLET, 5],
+      [null, 8],
+      [GREEN, 5],
+      [null, 8],
+      [BLUE, 5],
+      [null, 8],
+      [YELLOW, 5],
+    ]);
+
+    // Act
+    const bands = segmentBands(profile);
+
+    // Assert: 端の赤と黄が落ちる
+    expect(bands.map((band) => band.color)).toEqual(['violet', 'green', 'blue']);
+  });
+
+  it('端を落とすと 3 本を切る場合は落とさない', () => {
+    // Arrange: バンドが 3 本しかなく、うち 2 本が端に接している
+    const profile = profileOf([
+      [RED, 5],
+      [null, 8],
+      [VIOLET, 5],
+      [null, 8],
+      [GREEN, 5],
+    ]);
+
+    // Act
+    const bands = segmentBands(profile);
+
+    // Assert: 読めなくなるより、端のランを残すほうがまし
+    expect(bands.map((band) => band.color)).toEqual(['red', 'violet', 'green']);
+  });
+
+  it('端に接していないバンドは残す', () => {
+    // Arrange: 本体色 → 赤 → 本体色 → 紫 → 本体色
+    const profile = profileOf([
+      [null, 6],
+      [RED, 5],
+      [null, 8],
+      [VIOLET, 5],
+      [null, 6],
     ]);
 
     // Act
     const bands = segmentBands(profile);
 
     // Assert
-    expect(bands).toHaveLength(2);
-    expect(bands[0]?.start).toBe(0);
-    expect(bands[1]?.end).toBe(20);
+    expect(bands.map((band) => band.color)).toEqual(['red', 'violet']);
+  });
+
+  it('濃淡で 2 本に割れた同じバンドは 1 本に戻す', () => {
+    // Arrange: 太い赤バンドの中で明度だけが落ちる（縁のぼけ・陰）
+    const dark = [Math.round(RED[0] * 0.86), Math.round(RED[1] * 0.86), Math.round(RED[2] * 0.86)] as [number, number, number];
+    const profile = profileOf([
+      [null, 8],
+      [RED, 5],
+      [dark, 5],
+      [null, 8],
+    ]);
+
+    // Act
+    const bands = segmentBands(profile);
+
+    // Assert
+    expect(bands).toHaveLength(1);
+    expect(bands[0]?.start).toBe(8);
+    expect(bands[0]?.end).toBe(18);
   });
 
   it('隣接する異なる色は別のバンドとして分割する', () => {

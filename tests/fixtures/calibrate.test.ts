@@ -5,7 +5,7 @@ import { extractProfile } from '../../src/core/bands/profile.js';
 import { locateResistor } from '../../src/core/locate.js';
 import { rectify } from '../../src/core/rectify.js';
 import { bodyColumns } from '../../src/core/roiMapping.js';
-import { identifyBody, splitRuns } from '../../src/core/bands/runs.js';
+import { bandRuns } from '../../src/core/bands/segment.js';
 import { alignRunsToBands } from '../../src/core/bands/align.js';
 import {
   addObservations,
@@ -70,17 +70,18 @@ interface Run {
   readonly length: number;
 }
 
-/** 本体ランを除いた「バンド候補」のランを取り出す（分類はしない）。 */
+/**
+ * 本体ランを除いた「バンド候補」のランを取り出す。
+ * 解析側と同じ `bandRuns` を通すので、較正と本番で条件がずれない。
+ */
 function extractRuns(profile: readonly ProfileSample[]): Run[] {
-  const runs = splitRuns(profile, { edgeDeltaE: EDGE_DELTA_E, minRunLength: MIN_RUN_LENGTH });
-  const body = identifyBody(runs, CLUSTER_DELTA_E, BODY_LIGHTNESS_WEIGHT);
-  if (body === null) return [];
-
-  const bodyRuns = new Set(body.runIndices);
-  return runs
-    .map((run, index) => ({ run, index }))
-    .filter(({ index }) => !bodyRuns.has(index))
-    .map(({ run }) => ({ lab: run.lab, length: run.end - run.start }));
+  return bandRuns(profile, {
+    edgeDeltaE: EDGE_DELTA_E,
+    minBandWidth: MIN_RUN_LENGTH,
+    clusterDeltaE: CLUSTER_DELTA_E,
+    bodyLightnessWeight: BODY_LIGHTNESS_WEIGHT,
+    keepEdgeRuns: true,
+  }).map((run) => ({ lab: run.lab, length: run.end - run.start }));
 }
 
 function medianLab(samples: readonly LabColor[]): LabColor {

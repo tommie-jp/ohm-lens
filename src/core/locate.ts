@@ -55,16 +55,16 @@ const THRESHOLD_GROWTH = 1.6;
 const MIN_FOREGROUND_RATIO = 0.002;
 
 /**
- * 影とみなす色度の許容差。
- * 影は「背景と同じ色相のまま暗くなる」ので、a*b* の距離が小さい。
+ * 照明のムラ（影・ハイライト）とみなす色度の許容差。
+ * 同じ面が明るくなっても暗くなっても色相は変わらないので a*b* の距離が小さい。
  */
-const SHADOW_CHROMA_TOLERANCE = 9;
+const LIGHTING_CHROMA_TOLERANCE = 9;
 
 /**
- * 影とみなす明度の落差の上限。
- * これを超える暗さは影ではなく被写体（黒バンドなど）と考える。
+ * 照明のムラとみなす明度差の上限。
+ * これを超える差は照明ではなく別の物体（黒バンド、白飛びした金属など）と考える。
  */
-const SHADOW_MAX_LIGHTNESS_DROP = 24;
+const LIGHTING_MAX_LIGHTNESS_DIFF = 24;
 
 /** 本体とみなす太さの下限（最大太さに対する割合）。リード線を落とすため。 */
 const BODY_THICKNESS_RATIO = 0.45;
@@ -134,21 +134,22 @@ export function estimateBackground(image: RoiImage): LabColor {
 /**
  * その画素を背景とみなすか。
  *
- * 単純な ΔE 判定に加えて**影を背景に含める**。机の上で撮ると抵抗器の影が
- * 前景に入り、本体と連結して太さを 2 倍近くまで押し上げてしまうため。
- * 影は「色相はそのままで明度だけ少し下がる」ので、色度の距離が小さく
- * かつ明度の落差が限定的なものを影と判断する。黒バンドのように大きく
- * 暗い画素は落差が大きいので前景のまま残る。
+ * 単純な ΔE 判定に加えて**照明のムラを背景に含める**。机の上で撮ると
+ * 抵抗器の影が前景に入って本体と連結し、太さを 2 倍近くまで押し上げる。
+ * 逆に光源側が明るい写真では、その明るい領域が巨大な前景の塊になり、
+ * 主軸がそちらを向いてしまう（23-3.9kohm では検出枠が写真の左上に出た）。
+ *
+ * どちらも「色相はそのままで明度だけ動く」ので、色度の距離が小さく明度差が
+ * 限定的なものを照明と判断する。黒バンドや白飛びした金属は明度差が大きいので
+ * 前景のまま残る。
  */
 export function isBackgroundLike(lab: LabColor, background: LabColor, deltaE: number): boolean {
   if (deltaE2000(lab, background) <= deltaE) return true;
 
   const chromaDistance = Math.hypot(lab.a - background.a, lab.b - background.b);
-  const lightnessDrop = background.l - lab.l;
   return (
-    chromaDistance < SHADOW_CHROMA_TOLERANCE &&
-    lightnessDrop > 0 &&
-    lightnessDrop < SHADOW_MAX_LIGHTNESS_DROP
+    chromaDistance < LIGHTING_CHROMA_TOLERANCE &&
+    Math.abs(lab.l - background.l) < LIGHTING_MAX_LIGHTNESS_DIFF
   );
 }
 

@@ -7,7 +7,7 @@ Author: [tommie.jp](https://tommie.jp) ([@tommie-jp](https://github.com/tommie-j
 - **当面の URL**: `https://ohmlens.tommie.jp`
 - **方針**: ブラウザ完結（クライアントサイド推論）、サーバ不要
 - **Status**: Phase 0 実装中（Step 0-1〜0-6 完了、実画像での較正 Step 0-7 が残り。
-  サンプル 39 枚で検出 39/39・値の一致 19/39）
+  サンプル 39 枚で検出 39/39・値の一致 24/39）
 
 ## 開発
 

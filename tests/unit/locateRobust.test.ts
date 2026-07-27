@@ -120,7 +120,7 @@ function drawScene(spec: BarSpec): RoiImage {
   return { width, height, data };
 }
 
-describe('isBackgroundLike — 影の扱い', () => {
+describe('isBackgroundLike — 影と照明ムラの扱い', () => {
   const background = srgb255ToLab(160, 160, 158);
 
   it('背景そのものは背景', () => {
@@ -149,10 +149,18 @@ describe('isBackgroundLike — 影の扱い', () => {
     expect(isBackgroundLike(blue, background, 10)).toBe(false);
   });
 
-  it('背景より明るい画素は影ではない（前景のまま）', () => {
-    const bright = srgb255ToLab(230, 230, 228);
+  it('色相が同じでわずかに明るいだけの画素も背景に含める（照明ムラ）', () => {
+    // Arrange: 同じ机が光源側で明るいだけ。色度はほぼ変わらない
+    const lit = srgb255ToLab(205, 205, 203);
 
-    expect(isBackgroundLike(bright, background, 10)).toBe(false);
+    // Act / Assert
+    expect(isBackgroundLike(lit, background, 10)).toBe(true);
+  });
+
+  it('白飛びするほど明るい画素は前景（別の物体とみなす）', () => {
+    const blown = srgb255ToLab(252, 252, 250);
+
+    expect(isBackgroundLike(blown, background, 10)).toBe(false);
   });
 });
 
