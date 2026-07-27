@@ -132,6 +132,44 @@ describe('readResistor', () => {
     expect(reading?.ohms).toBeCloseTo(4700, 6);
   });
 
+  it('逆向きに写った実物 7.5Ω ±1% を rtl として読む', () => {
+    // Arrange: sample/27e7c302… の見え方。左から 茶-銀-黒-緑-紫 で並び、
+    // 許容差バンド(茶)が左端にある。末尾側(左)の間隔が広い。
+    const bands = bandsAt([
+      ['brown', 10, 14],
+      ['silver', 24, 28],
+      ['black', 30, 34],
+      ['green', 36, 40],
+      ['violet', 42, 46],
+    ]);
+
+    // Act
+    const reading = readResistor(bands, 56);
+
+    // Assert
+    expect(reading?.direction).toBe('rtl');
+    expect(reading?.ohms).toBeCloseTo(7.5, 6);
+    expect(reading?.tolerance).toBe(1);
+  });
+
+  it('逆向きに写った実物 10MΩ ±1% を rtl として読む', () => {
+    // Arrange: sample/77e537ac… の見え方。左から 茶-緑-黒-黒-茶
+    const bands = bandsAt([
+      ['brown', 10, 14],
+      ['green', 24, 28],
+      ['black', 30, 34],
+      ['black', 36, 40],
+      ['brown', 42, 46],
+    ]);
+
+    // Act
+    const reading = readResistor(bands, 56);
+
+    // Assert
+    expect(reading?.direction).toBe('rtl');
+    expect(reading?.ohms).toBeCloseTo(10e6, 6);
+  });
+
   it('確信度は常に 0..1 に収まる', () => {
     const reading = readResistor(
       bandsAt([

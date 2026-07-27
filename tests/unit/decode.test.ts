@@ -101,6 +101,32 @@ describe('decodeBandSequence — E系列適合', () => {
   });
 });
 
+describe('decodeBandSequence — 実物の青ボディ金属皮膜（sample/ の撮影分）', () => {
+  it('7.5Ω ±1%: violet-green-black-silver-brown（銀倍率）', () => {
+    const result = decodeBandSequence(['violet', 'green', 'black', 'silver', 'brown']);
+
+    expect(result?.ohms).toBeCloseTo(7.5, 6);
+    expect(result?.tolerance).toBe(1);
+    expect(result?.snapDeviation).toBeCloseTo(0, 9);
+  });
+
+  it('10MΩ ±1%: brown-black-black-green-brown', () => {
+    const result = decodeBandSequence(['brown', 'black', 'black', 'green', 'brown']);
+
+    expect(result?.ohms).toBeCloseTo(10e6, 6);
+    expect(result?.tolerance).toBe(1);
+    expect(result?.snapDeviation).toBeCloseTo(0, 9);
+  });
+
+  it('1Ω ±1%: brown-black-black-silver-brown（銀倍率）', () => {
+    const result = decodeBandSequence(['brown', 'black', 'black', 'silver', 'brown']);
+
+    expect(result?.ohms).toBeCloseTo(1, 6);
+    expect(result?.tolerance).toBe(1);
+    expect(result?.snapDeviation).toBeCloseTo(0, 9);
+  });
+});
+
 describe('decodeBandSequence — 異常系', () => {
   it.each([
     [[], 'バンド無し'],
