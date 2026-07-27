@@ -14,10 +14,10 @@ import { hasSamples, loadImage, loadManifest, type SampleEntry } from './loadSam
 
 const REPORT_PATH = join(import.meta.dirname, '../../sweep-report.txt');
 
-const EDGE_DELTA_E = [3, 4, 5, 6, 8, 10];
-const CLUSTER_DELTA_E = [4, 6, 8, 10, 12];
-const MIN_BAND_WIDTH = [2, 3, 4];
-const ROI_HEIGHT = 40;
+const EDGE_DELTA_E = [4, 6, 8];
+const CLUSTER_DELTA_E = [6, 8, 12];
+const MIN_BAND_WIDTH = [3, 5, 8];
+const ROI_WIDTHS = [160, 240, 360];
 const ROI_PADDING = 0.06;
 
 describe.skipIf(!hasSamples())('閾値の掃引', () => {
@@ -25,24 +25,27 @@ describe.skipIf(!hasSamples())('閾値の掃引', () => {
     const entries = loadManifest();
 
     // 画像の読み込みと ROI 化は 1 回だけ（掃引のたびにやると遅い）
-    const rois: { entry: SampleEntry; roi: RoiImage }[] = [];
+    const rois: { entry: SampleEntry; roi: RoiImage; width: number }[] = [];
     for (const entry of entries) {
       const image = await loadImage(entry.file);
       const box = locateResistor(image);
       if (box === null) continue;
-      rois.push({ entry, roi: rectify(image, box, { padding: ROI_PADDING, targetHeight: ROI_HEIGHT }) });
+      for (const width of ROI_WIDTHS) {
+        rois.push({ entry, roi: rectify(image, box, { padding: ROI_PADDING, targetWidth: width }), width });
+      }
     }
 
     const lines: string[] = [`ROI 化できた画像: ${rois.length}/${entries.length}`, ''];
-    lines.push('edgeΔE  clusterΔE  minWidth  正解  デコード成功');
+    lines.push('ROI幅  edgeΔE  clusterΔE  minWidth  正解  デコード成功');
 
-    let best = { edgeDeltaE: 0, clusterDeltaE: 0, minBandWidth: 0, correct: -1 };
+    let best = { edgeDeltaE: 0, clusterDeltaE: 0, minBandWidth: 0, roiWidth: 0, correct: -1 };
+    for (const roiWidth of ROI_WIDTHS) {
     for (const edgeDeltaE of EDGE_DELTA_E) {
       for (const clusterDeltaE of CLUSTER_DELTA_E) {
       for (const minBandWidth of MIN_BAND_WIDTH) {
         let correct = 0;
         let decoded = 0;
-        for (const { entry, roi } of rois) {
+        for (const { entry, roi } of rois.filter((r) => r.width === roiWidth)) {
           const result = analyzeRoi(roi, {
             segment: { edgeDeltaE, minBandWidth, clusterDeltaE },
             extent: { edgeDeltaE, minRunLength: minBandWidth, clusterDeltaE },
@@ -54,17 +57,18 @@ describe.skipIf(!hasSamples())('閾値の掃引', () => {
           }
         }
         lines.push(
-          `${String(edgeDeltaE).padStart(6)}  ${String(clusterDeltaE).padStart(9)}  ${String(minBandWidth).padStart(8)}  ` +
+          `${String(roiWidth).padStart(4)}  ${String(edgeDeltaE).padStart(6)}  ${String(clusterDeltaE).padStart(9)}  ${String(minBandWidth).padStart(8)}  ` +
             `${String(correct).padStart(4)}  ${String(decoded).padStart(12)}`,
         );
-        if (correct > best.correct) best = { edgeDeltaE, clusterDeltaE, minBandWidth, correct };
+        if (correct > best.correct) best = { edgeDeltaE, clusterDeltaE, minBandWidth, roiWidth, correct };
       }
       }
+    }
     }
 
     lines.push(
       '',
-      `最良: edgeΔE=${best.edgeDeltaE} clusterΔE=${best.clusterDeltaE} minWidth=${best.minBandWidth} → ${best.correct}/${rois.length} (${((best.correct / rois.length) * 100).toFixed(0)}%)`,
+      `最良: ROI幅=${best.roiWidth} edgeΔE=${best.edgeDeltaE} clusterΔE=${best.clusterDeltaE} minWidth=${best.minBandWidth} → ${best.correct}/${entries.length} (${((best.correct / entries.length) * 100).toFixed(0)}%)`,
     );
     writeFileSync(REPORT_PATH, lines.join('\n') + '\n', 'utf-8');
 

@@ -15,10 +15,25 @@ export interface RectifyOptions {
   readonly padding?: number;
   /** 出力の高さ [px]。指定するとアスペクト比を保って拡縮する。 */
   readonly targetHeight?: number;
+  /**
+   * 出力の幅 [px]。長軸方向の解像度を直接指定する。
+   *
+   * 色帯を分離できるかどうかは長軸方向の解像度で決まる（バンド 1 本に
+   * 何画素あるか）。高さで指定すると、細長い抵抗器ほど幅が足りなくなる。
+   * `targetHeight` より優先される。
+   */
+  readonly targetWidth?: number;
 }
 
 const CHANNELS = 4;
 const DEFAULT_PADDING = 0;
+
+/** 出力の拡縮率。幅指定が優先、次に高さ、どちらも無ければ等倍。 */
+function resolveScale(options: RectifyOptions, length: number, thickness: number): number {
+  if (options.targetWidth !== undefined) return Math.max(1, options.targetWidth) / length;
+  if (options.targetHeight !== undefined) return Math.max(1, options.targetHeight) / thickness;
+  return 1;
+}
 
 /**
  * 双一次補間で 1 画素を取り出す。画像の外側は端の画素で埋める
@@ -63,12 +78,9 @@ export function rectify(image: RoiImage, box: OrientedBox, options: RectifyOptio
   const sourceLength = Math.max(1, box.length * (1 + padding * 2));
   const sourceThickness = Math.max(1, box.thickness * (1 + padding * 2));
 
-  const outputHeight =
-    options.targetHeight === undefined
-      ? Math.max(1, Math.round(sourceThickness))
-      : Math.max(1, Math.round(options.targetHeight));
-  const scale = outputHeight / sourceThickness;
+  const scale = resolveScale(options, sourceLength, sourceThickness);
   const outputWidth = Math.max(1, Math.round(sourceLength * scale));
+  const outputHeight = Math.max(1, Math.round(sourceThickness * scale));
 
   const rad = (box.angleDeg * Math.PI) / 180;
   const cos = Math.cos(rad);

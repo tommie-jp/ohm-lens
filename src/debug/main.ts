@@ -1,4 +1,9 @@
 import { analyzeRoi, type AnalysisResult } from '../core/pipeline.js';
+import { locateResistor, type OrientedBox } from '../core/locate.js';
+import { rectify } from '../core/rectify.js';
+import type { RoiImage } from '../core/bands/profile.js';
+import { withOverrides, DEFAULT_PALETTE, type Palette } from '../core/color/palette.js';
+import { formatLabels, loadLabels, saveLabels, type LabelMap } from './labelStore.js';
 import { formatOhms, formatReading, MIN_REPORTABLE_CONFIDENCE } from '../core/format.js';
 import { clamp } from '../core/math.js';
 import type { Band, BandColor, LabColor } from '../types.js';
@@ -35,6 +40,11 @@ const elements = {
   labelJson: requireElement<HTMLPreElement>('#label-json'),
   copyLabel: requireElement<HTMLButtonElement>('#copy-label'),
   copyStatus: requireElement<HTMLSpanElement>('#copy-status'),
+  autoToggle: requireElement<HTMLInputElement>('#auto-toggle'),
+  saveLabel: requireElement<HTMLButtonElement>('#save-label'),
+  clearLabels: requireElement<HTMLButtonElement>('#clear-labels'),
+  labelCount: requireElement<HTMLSpanElement>('#label-count'),
+  paletteStatus: requireElement<HTMLSpanElement>('#palette-status'),
 };
 
 /** 選択肢に出すバンド色。 */
@@ -47,6 +57,9 @@ const BAND_COLORS: readonly BandColor[] = [
 let correctedColors: BandColor[] = [];
 
 let source: HTMLCanvasElement | null = null;
+let detectedBox: OrientedBox | null = null;
+let palette: Palette | null = null;
+let savedLabels: LabelMap = loadLabels();
 let selection: Rect | null = null;
 let dragStart: { x: number; y: number } | null = null;
 
@@ -90,6 +103,11 @@ function redrawSource(): void {
   if (source === null) return;
   const context = context2d(elements.sourceCanvas);
   context.drawImage(source, 0, 0);
+
+  if (elements.autoToggle.checked) {
+    if (detectedBox !== null) drawDetectedBox(context, detectedBox);
+    return;
+  }
   if (selection === null) return;
 
   context.strokeStyle = '#00b0ff';
@@ -97,27 +115,93 @@ function redrawSource(): void {
   context.strokeRect(selection.x, selection.y, selection.width, selection.height);
 }
 
-function analyzeSelection(): void {
-  if (source === null || selection === null) return;
-  if (selection.width < 1 || selection.height < 1) return;
+/** 自動検出した回転ボックスを元画像に重ねて描く。 */
+function drawDetectedBox(context: CanvasRenderingContext2D, box: OrientedBox): void {
+  const rad = (box.angleDeg * Math.PI) / 180;
+  const cos = Math.cos(rad);
+  const sin = Math.sin(rad);
+  const halfLength = box.length / 2;
+  const halfThickness = box.thickness / 2;
 
-  redrawSource();
+  const corners: readonly (readonly [number, number])[] = [
+    [-halfLength, -halfThickness],
+    [halfLength, -halfThickness],
+    [halfLength, halfThickness],
+    [-halfLength, halfThickness],
+  ];
 
-  const roi = context2d(source, { willReadFrequently: true }).getImageData(
+  context.strokeStyle = '#ff4081';
+  context.lineWidth = Math.max(2, Math.round(box.thickness / 12));
+  context.beginPath();
+  corners.forEach(([along, across], index) => {
+    const x = box.centerX + along * cos - across * sin;
+    const y = box.centerY + along * sin + across * cos;
+    if (index === 0) context.moveTo(x, y);
+    else context.lineTo(x, y);
+  });
+  context.closePath();
+  context.stroke();
+}
+
+/** テストのフィクスチャハーネスと揃えた ROI の切り出し条件。 */
+const ROI_PADDING = 0.06;
+const ROI_HEIGHT = 40;
+
+/**
+ * 解析対象の ROI を用意する。
+ *
+ * 自動検出が有効なら、画像全体から抵抗器を探して水平化する
+ * （`tests/fixtures` と同じ経路）。無効なら選択範囲をそのまま使う。
+ */
+function buildRoi(): RoiImage | null {
+  if (source === null) return null;
+  const context = context2d(source, { willReadFrequently: true });
+
+  if (elements.autoToggle.checked) {
+    const full = context.getImageData(0, 0, source.width, source.height);
+    const image: RoiImage = { width: full.width, height: full.height, data: full.data };
+    const box = locateResistor(image);
+    if (box === null) {
+      elements.roiHint.textContent = '抵抗器を自動検出できませんでした。手動指定に切り替えてください。';
+      return null;
+    }
+    detectedBox = box;
+    elements.roiHint.textContent =
+      `自動検出: 角度 ${box.angleDeg.toFixed(1)}度 / 長さ ${Math.round(box.length)}px。` +
+      ' ドラッグしたい場合は「自動検出」を外してください。';
+    return rectify(image, box, { padding: ROI_PADDING, targetHeight: ROI_HEIGHT });
+  }
+
+  detectedBox = null;
+  if (selection === null || selection.width < 1 || selection.height < 1) return null;
+  const roi = context.getImageData(
     Math.round(selection.x),
     Math.round(selection.y),
     Math.round(selection.width),
     Math.round(selection.height),
   );
+  return { width: roi.width, height: roi.height, data: roi.data };
+}
+
+function analyzeSelection(): void {
+  if (source === null) return;
+
+  redrawSource();
+
+  const roi = buildRoi();
+  if (roi === null) return;
 
   elements.roiCanvas.width = roi.width;
   elements.roiCanvas.height = roi.height;
-  context2d(elements.roiCanvas).putImageData(roi, 0, 0);
+  const roiContext = context2d(elements.roiCanvas);
+  const imageData = roiContext.createImageData(roi.width, roi.height);
+  imageData.data.set(roi.data);
+  roiContext.putImageData(imageData, 0, 0);
 
-  const result = analyzeRoi(
-    { width: roi.width, height: roi.height, data: roi.data },
-    { adaptWhiteBalance: elements.adaptToggle.checked },
-  );
+  const result = analyzeRoi(roi, {
+    adaptWhiteBalance: elements.adaptToggle.checked,
+    ...(palette === null ? {} : { segment: { palette } }),
+  });
 
   drawProfile(elements.profileCanvas, result.profile, result.bands);
   renderBands(result.bands);
@@ -176,14 +260,53 @@ function colorSelect(index: number, selected: BandColor): HTMLSelectElement {
   return select;
 }
 
-/** labels.json に貼り付けられる形で正解ラベルを出す。 */
+/** labels.json に貼り付けられる形で、保存済みラベルをまとめて出す。 */
 function renderLabelJson(): void {
-  if (correctedColors.length === 0) {
-    elements.labelJson.textContent = '（バンドを検出すると表示されます）';
+  const count = Object.keys(savedLabels).length;
+  elements.labelCount.textContent = count === 0 ? '保存済み 0 件' : `保存済み ${count} 件`;
+
+  const current =
+    correctedColors.length === 0
+      ? ''
+      : `現在の修正: ${JSON.stringify(elements.labelName.value.trim() || '<ファイル名>')}: ` +
+        `${JSON.stringify(correctedColors)}\n\n`;
+
+  elements.labelJson.textContent =
+    count === 0 && correctedColors.length === 0
+      ? '（バンドを検出すると表示されます）'
+      : `${current}${formatLabels(savedLabels)}`;
+}
+
+/** 現在の修正内容を保存済みラベルに追加する。 */
+function saveCurrentLabel(): void {
+  const name = elements.labelName.value.trim();
+  if (name === '' || correctedColors.length === 0) {
+    elements.copyStatus.textContent = 'ファイル名とバンドが必要です';
     return;
   }
-  const name = elements.labelName.value.trim() || '<ファイル名>';
-  elements.labelJson.textContent = `  ${JSON.stringify(name)}: ${JSON.stringify(correctedColors)}`;
+  savedLabels = { ...savedLabels, [name]: [...correctedColors] };
+  saveLabels(savedLabels);
+  elements.copyStatus.textContent = `${name} を保存しました`;
+  renderLabelJson();
+}
+
+/** 学習済みパレットを読み込む。dev サーバーが sample/palette.json を配信する。 */
+async function loadPaletteFromServer(): Promise<void> {
+  try {
+    const response = await fetch('/palette.json');
+    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+    const parsed = (await response.json()) as { colors?: Record<string, LabColor> };
+    const colors = parsed.colors ?? {};
+    const count = Object.keys(colors).length;
+    if (count === 0) {
+      elements.paletteStatus.textContent = '学習パレット: なし（既定の基準色を使用）';
+      return;
+    }
+    palette = withOverrides(DEFAULT_PALETTE, colors as Parameters<typeof withOverrides>[1]);
+    elements.paletteStatus.textContent = `学習パレット: ${count} 色を適用中`;
+  } catch {
+    elements.paletteStatus.textContent = '学習パレット: なし（既定の基準色を使用）';
+  }
 }
 
 function renderReading(result: AnalysisResult): void {
@@ -251,8 +374,19 @@ elements.adaptToggle.addEventListener('change', analyzeSelection);
 
 elements.labelName.addEventListener('input', renderLabelJson);
 
+elements.autoToggle.addEventListener('change', analyzeSelection);
+
+elements.saveLabel.addEventListener('click', saveCurrentLabel);
+
+elements.clearLabels.addEventListener('click', () => {
+  savedLabels = {};
+  saveLabels(savedLabels);
+  elements.copyStatus.textContent = '保存済みラベルを消去しました';
+  renderLabelJson();
+});
+
 elements.copyLabel.addEventListener('click', () => {
-  const text = elements.labelJson.textContent ?? '';
+  const text = formatLabels(savedLabels);
   navigator.clipboard.writeText(text).then(
     () => {
       elements.copyStatus.textContent = 'コピーしました';
@@ -288,3 +422,6 @@ elements.sourceCanvas.addEventListener('pointerup', (event) => {
   dragStart = null;
   analyzeSelection();
 });
+
+void loadPaletteFromServer();
+renderLabelJson();
