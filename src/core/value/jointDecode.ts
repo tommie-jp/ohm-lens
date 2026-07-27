@@ -105,6 +105,19 @@ const OUT_OF_RANGE_SCALE = 1.2;
 /** 流通範囲の加点の上限（離れすぎても頭打ちにする）。 */
 const MAX_OUT_OF_RANGE_COST = 6;
 
+/**
+ * 金・銀は数字バンドにはならない（IEC 60062 では倍率と許容差だけ）。
+ *
+ * 最も近い色が金・銀のランを数字として読むには別の色へ読み替えることになる。
+ * その読み替え自体は許す（本体ベージュを金と取り違えることがあるため）が、
+ * **確信度は下げる**。物理的にありえない解釈に乗っているぶん、当たっている
+ * 保証がない。読み替えが 1 本増えるごとに確信度を半分にする。
+ */
+const METALLIC_COLORS: ReadonlySet<BandColor> = new Set<BandColor>(['gold', 'silver']);
+
+/** 金属色を数字として読み替えた本数 1 本あたりの確信度の倍率。 */
+const METALLIC_DIGIT_CONFIDENCE = 0.5;
+
 /** スナップ偏差がこの値で適合スコアが尽きる（decode.ts と同じ水準）。 */
 const SNAP_DEVIATION_LIMIT = 0.02;
 
@@ -121,6 +134,8 @@ interface Interpretation {
   readonly direction: ReadDirection;
   readonly cost: number;
   readonly meanDeltaE: number;
+  /** 金属色に最も近いランを数字として読み替えた本数 */
+  readonly metallicDigits: number;
   /** 採用したランの添字（画像上の並び順） */
   readonly keptIndices: readonly number[];
   /** 読み取り方向に並べ替えた色列 */
@@ -264,11 +279,21 @@ export function jointReadResistor(
             MAX_OUT_OF_RANGE_COST,
             OUT_OF_RANGE_SCALE * decadesOutsideCommonRange(decoded.ohms),
           );
+          // 金属色に最も近いランを数字として読み替えた本数（確信度を下げる）
+          const digitCount = oriented.length <= 4 ? 2 : 3;
+          let metallicDigits = 0;
+          for (let position = 0; position < digitCount; position += 1) {
+            const runIndex =
+              direction === 'ltr' ? position : keptIndices.length - 1 - position;
+            const nearest = (candidates[keptIndices[runIndex] as number] as Candidate[])[0];
+            if (nearest !== undefined && METALLIC_COLORS.has(nearest.color)) metallicDigits += 1;
+          }
           consider({
             decoded,
             direction,
             cost: meanDeltaE + dropCost + snapCost + rankCost + rangeCost,
             meanDeltaE,
+            metallicDigits,
             keptIndices: [...keptIndices],
             orientedColors: [...oriented],
           });
@@ -294,7 +319,8 @@ export function jointReadResistor(
     runnerUp === null
       ? 0.8
       : clamp01((runnerUp.cost - chosen.cost) / Math.max(1, runnerUp.cost + chosen.cost));
-  const confidence = clamp01(absolute * (0.4 + 0.6 * margin));
+  const plausibility = METALLIC_DIGIT_CONFIDENCE ** chosen.metallicDigits;
+  const confidence = clamp01(absolute * (0.4 + 0.6 * margin) * plausibility);
 
   // 採用した解釈を「画像上の並び順」に戻す。rtl のときは役割が末尾から付く。
   const roles = rolesFor(chosen.orientedColors);

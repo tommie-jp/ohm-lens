@@ -4,11 +4,12 @@ import { locateResistor } from '../core/locate.js';
 import { rectify } from '../core/rectify.js';
 import { refineBoxExtent } from '../core/refine.js';
 import { analyzeOptions, refineOptions, ROI_OPTIONS } from '../core/settings.js';
-import { formatOhms } from '../core/format.js';
+import { formatOhms, isReportable } from '../core/format.js';
 import { jointReadResistor } from '../core/value/jointDecode.js';
 import { DEFAULT_PALETTE, type Palette } from '../core/color/palette.js';
 import type { RoiImage } from '../core/bands/profile.js';
 import { buildAnnotationSvg, panelHeightFor } from './render.js';
+import { COLOR_SPACE_PANEL_WIDTH } from './colorSpace.js';
 
 /**
  * 1 枚の写真を検出・解析し、結果を焼き込んだ画像を返す。
@@ -37,6 +38,11 @@ export interface AnnotateResult {
   readonly located: boolean;
   readonly ohms: number | null;
   readonly correct: boolean;
+  /**
+   * 確信度が閾値を超えていて、値として出してよいか。
+   * 低いものは実機では「?」になる（誤った値を自信ありげに出さない方針）。
+   */
+  readonly confident: boolean;
 }
 
 /** 画像を RGBA の生ピクセルとして読む（EXIF の向きを反映、長辺を抑える）。 */
@@ -75,7 +81,7 @@ export async function annotateImage(
 
   if (located === null) {
     const input = {
-      width: image.width,
+      width: canvasWidth(image.width),
       height: image.height,
       box: null,
       bands: [],
@@ -90,6 +96,7 @@ export async function annotateImage(
       located: false,
       ohms: null,
       correct: false,
+      confident: false,
     };
   }
 
@@ -104,6 +111,7 @@ export async function annotateImage(
   );
 
   const ohms = result.reading?.ohms ?? null;
+  const confident = isReportable(result.reading ?? null);
   const correct =
     options.expectedOhms !== undefined &&
     ohms !== null &&
@@ -113,12 +121,13 @@ export async function annotateImage(
     .map((used) => `${used.color}${used.roleText}`)
     .join(' ');
   const caption =
-    `${label} | ${expected} → ${ohms === null ? '読取不可' : formatOhms(ohms)} | ` +
+    `${label} | ${expected} → ` +
+    `${ohms === null ? '読取不可' : `${formatOhms(ohms)}${confident ? '' : '(保留)'}`} | ` +
     `${box.angleDeg.toFixed(0)}° L${Math.round(box.length)} T${Math.round(box.thickness)} ` +
     `(比 ${(box.length / box.thickness).toFixed(2)}) | ${bandSummary}`;
 
   const input = {
-    width: image.width,
+    width: canvasWidth(image.width),
     height: image.height,
     box,
     bands: result.bands,
@@ -136,24 +145,34 @@ export async function annotateImage(
     located: true,
     ohms,
     correct,
+    confident,
   };
 }
 
 /**
- * 元画像に SVG を焼き込む。色空間パネルのぶんだけ下に伸ばしてから重ねる。
- * 写真の上に重ねると抵抗器が隠れるので、キャンバスを広げて場所を作る。
+ * 元画像に SVG を焼き込む。色空間パネルのぶんだけキャンバスを広げてから重ねる。
+ * 写真の上に重ねると抵抗器が隠れるので、下と（狭ければ）右に場所を作る。
  */
 async function composite(image: RoiImage, svg: string, panelHeight: number): Promise<Buffer> {
   const base = sharp(Buffer.from(image.data), {
     raw: { width: image.width, height: image.height, channels: 4 },
   });
-  const extended =
-    panelHeight === 0
-      ? base
-      : base.extend({ bottom: panelHeight, background: '#ffffff' });
+  if (panelHeight === 0) {
+    return base.composite([{ input: Buffer.from(svg), top: 0, left: 0 }]).jpeg({ quality: 88 }).toBuffer();
+  }
 
-  return extended
+  return base
+    .extend({
+      bottom: panelHeight,
+      right: Math.max(0, canvasWidth(image.width) - image.width),
+      background: '#ffffff',
+    })
     .composite([{ input: Buffer.from(svg), top: 0, left: 0 }])
     .jpeg({ quality: 88 })
     .toBuffer();
+}
+
+/** 色空間パネルが収まるキャンバス幅。小さい写真では写真より広くなる。 */
+function canvasWidth(imageWidth: number): number {
+  return Math.max(imageWidth, COLOR_SPACE_PANEL_WIDTH);
 }

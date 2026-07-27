@@ -11,8 +11,20 @@ import type { ResistorReading } from '../types.js';
  * 誤った値を自信ありげに出すくらいなら読めないと言う、という方針
  * （設計メモ §2 [5]）。Phase 1 のオーバーレイと Phase 2 の時間方向投票も
  * この閾値を共有すること。
+ *
+ * `sample/` の 39 枚での実測。0.5 は正解を 18 枚も捨てながら誤答は 1 件も
+ * 減らせていない（0.3 と同じ 1 件）。**0.3 が 0.5 より厳密に良い。**
+ *
+ * | 閾値 | 0 | 0.25 | 0.28 | **0.30** | 0.35 | 0.50 |
+ * | ------ | --- | ------ | ------ | ---------- | ------ | ------ |
+ * | 正解 | 30 | 30 | 28 | **27** | 23 | 12 |
+ * | 誤答 | 8 | 5 | 4 | **1** | 1 | 1 |
+ * | 保留 | 1 | 4 | 7 | **11** | 15 | 26 |
+ *
+ * 0.25 なら正解を 1 枚も落とさないが、誤答が 5 件残る。方針は「自信ありげに
+ * 間違えない」なので、誤答がほぼ消える 0.30 を採る。
  */
-export const MIN_REPORTABLE_CONFIDENCE = 0.5;
+export const MIN_REPORTABLE_CONFIDENCE = 0.3;
 
 const UNITS: readonly { readonly threshold: number; readonly suffix: string }[] = [
   { threshold: 1e9, suffix: 'G' },

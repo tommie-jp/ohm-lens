@@ -136,6 +136,10 @@ async function main(): Promise<void> {
   const captions: string[] = [];
   let located = 0;
   let correct = 0;
+  /** 実機での見え方。確信度が低い読み取りは値を出さず「?」になる。 */
+  let reported = 0;
+  let wrong = 0;
+  let held = 0;
   let failed = 0;
 
   for (const [index, file] of files.entries()) {
@@ -154,6 +158,10 @@ async function main(): Promise<void> {
 
       if (result.located) located += 1;
       if (result.correct) correct += 1;
+      // 実機での見え方で三分する（確信度が低ければ値を出さない）
+      if (result.ohms === null || !result.confident) held += 1;
+      else if (result.correct) reported += 1;
+      else wrong += 1;
       captions.push(result.caption);
       console.log(`${progress} ${result.correct ? '○' : result.located ? '△' : '×'} ${result.caption}`);
     } catch (error) {
@@ -171,6 +179,10 @@ async function main(): Promise<void> {
     `\n処理 ${files.length} 枚 / 検出成功 ${located} / 読込失敗 ${failed}` +
       (withExpected > 0 ? ` / 値一致 ${correct}/${withExpected}` : ''),
   );
+  if (withExpected > 0) {
+    // 誤った値を自信ありげに出さない方針なので、誤答が何件残るかが要点
+    console.log(`実機での見え方: 正解 ${reported} / 誤答 ${wrong} / 保留 ${held}`);
+  }
   console.log(`出力: ${args.outDir}（summary.txt に一覧）`);
 }
 

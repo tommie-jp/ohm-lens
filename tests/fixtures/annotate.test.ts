@@ -3,7 +3,10 @@ import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import sharp from 'sharp';
 import { annotateImage, loadRoiImage } from '../../src/annotate/pipeline.js';
-import { COLOR_SPACE_PANEL_HEIGHT } from '../../src/annotate/colorSpace.js';
+import {
+  COLOR_SPACE_PANEL_HEIGHT,
+  COLOR_SPACE_PANEL_WIDTH,
+} from '../../src/annotate/colorSpace.js';
 import { hasSamples, loadManifest, loadPalette, sampleDir } from './loadSample.js';
 
 /**
@@ -38,9 +41,11 @@ describe.skipIf(!hasSamples())('検出結果の焼き込み', () => {
     expect(captions).toHaveLength(entries.length);
   });
 
-  it('色空間パネルのぶん、出力画像が下に伸びている', async () => {
-    // Arrange: 1 枚だけで確認する（全件は上のテストで見ている）
-    const entry = loadManifest()[0];
+  it.each([0, -1])('色空間パネルが収まるだけキャンバスを広げる（%s 枚目）', async (index) => {
+    // Arrange: 大きい写真と、パネルより狭い写真の両方で見る
+    const entries = loadManifest();
+    const sorted = [...entries].sort((a, b) => a.file.localeCompare(b.file));
+    const entry = index === 0 ? sorted[0] : sorted[sorted.length - 1];
     if (entry === undefined) return;
     const path = join(sampleDir(), entry.file);
     const source = await loadRoiImage(path);
@@ -49,8 +54,8 @@ describe.skipIf(!hasSamples())('検出結果の焼き込み', () => {
     const result = await annotateImage(path, entry.file, { palette: loadPalette() });
     const meta = await sharp(result.jpeg).metadata();
 
-    // Assert: 写真は隠さず、下に帯を足している
-    expect(meta.width).toBe(source.width);
+    // Assert: 写真は隠さず、下に帯を足している。写真が狭ければ右にも広げる
+    expect(meta.width).toBe(Math.max(source.width, COLOR_SPACE_PANEL_WIDTH));
     expect(meta.height).toBe(source.height + COLOR_SPACE_PANEL_HEIGHT);
   });
 });
