@@ -1,70 +1,301 @@
 :root {
   color-scheme: light dark;
   --border: color-mix(in srgb, currentColor 20%, transparent);
-  --muted: color-mix(in srgb, currentColor 60%, transparent);
+  --muted: color-mix(in srgb, currentColor 58%, transparent);
+  --surface: color-mix(in srgb, currentColor 4%, transparent);
+  --accent: #00b0ff;
+}
+
+* {
+  box-sizing: border-box;
 }
 
 body {
   margin: 0 auto;
-  padding: 1.5rem;
-  max-width: 60rem;
+  padding: 1rem 1.25rem 2rem;
+  max-width: 72rem;
   font-family: system-ui, sans-serif;
   line-height: 1.6;
 }
 
-h1 {
-  font-size: 1.4rem;
-  margin-bottom: 0.25rem;
+/* ---- ヘッダ ---------------------------------------------------------- */
+
+.app-header {
+  display: flex;
+  align-items: baseline;
+  gap: 0.75rem;
+  margin-bottom: 1rem;
 }
 
-h2 {
-  font-size: 1rem;
-  margin: 0 0 0.5rem;
-  padding-bottom: 0.25rem;
-  border-bottom: 1px solid var(--border);
+.app-header h1 {
+  margin: 0;
+  font-size: 1.3rem;
 }
 
-section {
-  margin-block: 1.75rem;
-}
-
-.lead,
-.hint {
+.tagline {
+  margin: 0;
   color: var(--muted);
-  font-size: 0.875rem;
+  font-size: 0.85rem;
+}
+
+/* ---- レイアウト: 映像を大きく、結果を隣に -------------------------- */
+
+.layout {
+  display: grid;
+  gap: 1.25rem;
+  grid-template-columns: minmax(0, 1.6fr) minmax(19rem, 1fr);
+  grid-template-areas:
+    'stage side'
+    'advanced advanced';
+  align-items: start;
+}
+
+.stage {
+  grid-area: stage;
+}
+
+.side {
+  grid-area: side;
+  display: grid;
+  gap: 1rem;
+}
+
+.advanced {
+  grid-area: advanced;
+}
+
+/* ---- 映像 ------------------------------------------------------------ */
+
+.stage-media {
+  position: relative;
+  display: grid;
+  place-items: center;
+  min-height: 16rem;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--surface);
+  overflow: hidden;
+}
+
+#source-canvas {
+  display: block;
+  max-width: 100%;
+  max-height: 60vh;
+  /* ROI ドラッグとページスクロールが競合しないようにする */
+  touch-action: none;
+  cursor: crosshair;
+}
+
+.empty-state {
+  padding: 2rem 1rem;
+  text-align: center;
+}
+
+.empty-title {
+  margin: 0 0 1rem;
+  color: var(--muted);
+}
+
+.empty-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.6rem;
+  justify-content: center;
+}
+
+.stage-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem 0.9rem;
+  margin-top: 0.6rem;
+  min-height: 2.25rem;
+}
+
+.stage-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+
+/* ---- カード ---------------------------------------------------------- */
+
+.card {
+  padding: 0.9rem 1rem;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+}
+
+.card h2 {
+  margin: 0 0 0.4rem;
+  font-size: 0.95rem;
+}
+
+.result {
+  background: var(--surface);
+}
+
+.learn {
+  border-color: color-mix(in srgb, var(--accent) 45%, transparent);
+}
+
+.reading {
+  display: block;
+  font-size: 2.1rem;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  line-height: 1.25;
+}
+
+.reading-note {
+  margin: 0.1rem 0 0;
+  color: var(--muted);
+  font-size: 0.85rem;
+  min-height: 1.2em;
+}
+
+.learn-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  margin-bottom: 0.5rem;
+}
+
+.learn-row input[type='text'] {
+  flex: 1 1 5rem;
+  min-width: 5rem;
+}
+
+/* ---- 文字 ------------------------------------------------------------ */
+
+.hint,
+.status {
+  color: var(--muted);
+  font-size: 0.85rem;
+}
+
+.hint {
+  margin: 0 0 0.6rem;
+}
+
+.status {
+  margin: 0.15rem 0 0;
+  min-height: 1.2em;
+}
+
+.status.muted {
+  opacity: 0.8;
+}
+
+.minor-actions {
+  display: flex;
+  gap: 0.9rem;
+  margin: 0.6rem 0 0;
+}
+
+/* ---- 部品 ------------------------------------------------------------ */
+
+button,
+select,
+input[type='text'] {
+  padding: 0.45rem 0.8rem;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: Canvas;
+  color: inherit;
+  font: inherit;
+  font-size: 0.9rem;
+}
+
+button {
+  cursor: pointer;
+}
+
+button:hover:not(:disabled) {
+  border-color: color-mix(in srgb, currentColor 40%, transparent);
+}
+
+button.primary {
+  border-color: transparent;
+  background: var(--accent);
+  color: #002733;
+  font-weight: 600;
+}
+
+button.quiet {
+  border-color: transparent;
+  background: transparent;
+  color: var(--muted);
+  text-decoration: underline;
+}
+
+/* 副次操作。主操作と取り違えないよう文字リンク相当まで格下げする。 */
+button.link {
+  padding: 0;
+  border: none;
+  background: none;
+  color: var(--muted);
+  font-size: 0.8rem;
+  text-decoration: underline;
+}
+
+/* ---- 折りたたみ ------------------------------------------------------ */
+
+.fold {
+  margin-top: 0.75rem;
+  border-top: 1px solid var(--border);
+}
+
+.fold > summary,
+.subfold > summary {
+  cursor: pointer;
+  padding: 0.5rem 0;
+  color: var(--muted);
+  font-size: 0.85rem;
+}
+
+.fold > summary {
+  font-weight: 600;
+}
+
+.fold[open] > summary {
+  margin-bottom: 0.5rem;
 }
 
 .controls {
   display: flex;
   flex-wrap: wrap;
-  gap: 0.75rem;
+  gap: 0.6rem 0.9rem;
   align-items: center;
   margin-bottom: 0.5rem;
 }
 
+.controls label {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  font-size: 0.9rem;
+}
+
+/* ---- 解析の中身 ------------------------------------------------------ */
+
 .canvas-wrap {
   overflow-x: auto;
-}
-
-canvas {
-  max-width: 100%;
-  border: 1px solid var(--border);
-  border-radius: 4px;
-}
-
-#source-canvas {
-  cursor: crosshair;
+  margin-bottom: 0.6rem;
 }
 
 canvas.roi {
+  display: block;
   width: 100%;
+  border: 1px solid var(--border);
+  border-radius: 4px;
   image-rendering: pixelated;
 }
 
 table {
   border-collapse: collapse;
   width: 100%;
-  font-size: 0.875rem;
+  font-size: 0.85rem;
 }
 
 th,
@@ -83,18 +314,12 @@ td {
   vertical-align: -2px;
 }
 
-.reading {
-  display: block;
-  font-size: 2rem;
-  font-weight: 700;
-  font-variant-numeric: tabular-nums;
-}
-
 .detail {
   display: grid;
   grid-template-columns: max-content 1fr;
   gap: 0.15rem 1rem;
-  font-size: 0.875rem;
+  margin: 0.4rem 0 0;
+  font-size: 0.85rem;
   color: var(--muted);
 }
 
@@ -106,61 +331,19 @@ td {
   margin: 0;
 }
 
-[hidden] {
-  display: none !important;
-}
-
 .code {
   padding: 0.6rem 0.8rem;
   border: 1px solid var(--border);
   border-radius: 4px;
-  background: color-mix(in srgb, currentColor 5%, transparent);
-  font-size: 0.85rem;
+  background: var(--surface);
+  font-size: 0.8rem;
   overflow-x: auto;
   white-space: pre-wrap;
   word-break: break-all;
 }
 
-td select {
-  font-size: 0.85rem;
-}
+/* ---- 下部固定バー（スマホ） ------------------------------------------ */
 
-/* ---- モバイル対応 ---------------------------------------------------- */
-
-/* ROI ドラッグとページスクロールが競合しないようにする。
-   pointer events で自前処理しているので、ブラウザのジェスチャは止める。 */
-#source-canvas {
-  touch-action: none;
-}
-
-/* 読み取り結果はカメラ直下に大きく。スマホでは最優先の情報。 */
-.result-card {
-  padding: 0.75rem 1rem;
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  background: color-mix(in srgb, currentColor 4%, transparent);
-}
-
-.learn-card {
-  padding: 0.75rem 1rem;
-  border: 1px solid color-mix(in srgb, #00b0ff 45%, transparent);
-  border-radius: 8px;
-}
-
-/* 詳細は折りたたむ。開いたときだけ場所を取る。 */
-.fold > summary {
-  cursor: pointer;
-  padding: 0.5rem 0;
-  font-weight: 600;
-  font-size: 0.95rem;
-  border-bottom: 1px solid var(--border);
-}
-
-.fold[open] > summary {
-  margin-bottom: 0.75rem;
-}
-
-/* 画面下部の固定バー。スマホで親指が届く位置に主要操作を置く。 */
 .sticky-bar {
   position: fixed;
   inset: auto 0 0 0;
@@ -179,53 +362,59 @@ td select {
   font-variant-numeric: tabular-nums;
 }
 
-@media (max-width: 640px) {
+/* ---- 補助 ------------------------------------------------------------ */
+
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+[hidden] {
+  display: none !important;
+}
+
+/* ---- スマホ ---------------------------------------------------------- */
+
+@media (max-width: 760px) {
   body {
     padding: 0.75rem 0.75rem 5rem; /* 固定バーのぶん余白を空ける */
   }
 
-  h1 {
-    font-size: 1.15rem;
+  .layout {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-areas:
+      'stage'
+      'side'
+      'advanced';
   }
 
-  section,
-  .fold {
-    margin-block: 1.25rem;
+  .app-header h1 {
+    font-size: 1.1rem;
   }
 
   /* タップターゲットを 44px 以上に */
-  button,
+  button:not(.link),
   select,
-  input[type='text'],
-  input[type='file'] {
+  input[type='text'] {
     min-height: 44px;
     font-size: 1rem;
   }
 
-  .controls {
-    gap: 0.5rem;
-  }
-
-  .controls > label {
-    display: flex;
-    align-items: center;
-    gap: 0.4rem;
-  }
-
-  /* バンド表は横スクロールさせる（本文は横に溢れさせない） */
-  #bands-table {
-    font-size: 0.8rem;
+  #source-canvas {
+    max-height: 45vh;
   }
 
   .reading {
-    font-size: 1.75rem;
+    font-size: 1.9rem;
   }
 
   .sticky-bar:not([hidden]) {
     display: flex;
-  }
-
-  .sticky-bar button {
-    padding-inline: 1.1rem;
   }
 }

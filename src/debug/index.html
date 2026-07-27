@@ -7,7 +7,7 @@
       content="width=device-width, initial-scale=1.0, viewport-fit=cover"
     />
     <meta name="theme-color" content="#00b0ff" />
-    <title>OhmLens — Phase 0 デバッグ</title>
+    <title>OhmLens — 抵抗値リーダー</title>
     <link
       rel="icon"
       href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><text y='14' font-size='14'>Ω</text></svg>"
@@ -15,142 +15,159 @@
     <link rel="stylesheet" href="./style.css" />
   </head>
   <body>
-    <header>
-      <h1>OhmLens — Phase 0 デバッグ</h1>
-      <p class="lead">
-        静止画から色帯解析の各段階を確認するツール。画像を読み込み、抵抗器の部分を
-        ドラッグで囲むと ROI として解析します。
-      </p>
+    <header class="app-header">
+      <h1>OhmLens</h1>
+      <p class="tagline">抵抗のカラーコードを読む</p>
     </header>
 
-    <main>
-      <section>
-        <h2>1. 入力</h2>
-        <div class="controls">
-          <input type="file" id="file-input" />
-          <button type="button" id="sample-button">合成サンプルを読み込む</button>
-          <button type="button" id="camera-button">カメラを開始</button>
-          <button type="button" id="capture-button" hidden>この画で止める</button>
-          <select id="camera-select" hidden aria-label="カメラの選択"></select>
-          <label>
-            <input type="checkbox" id="auto-toggle" checked />
-            抵抗器を自動検出（角度も補正）
-          </label>
-          <label>
-            <input type="checkbox" id="adapt-toggle" checked />
-            色順応補正（本体色アンカー）
-          </label>
+    <main class="layout">
+      <!-- 左: 映像と入力操作 -->
+      <section class="stage" aria-label="映像">
+        <div class="stage-media">
+          <canvas id="source-canvas" hidden></canvas>
+          <div class="empty-state" id="empty-state">
+            <p class="empty-title">抵抗を映すか、画像を選んでください</p>
+            <div class="empty-actions">
+              <button type="button" id="camera-button" class="primary">
+                カメラを開始
+              </button>
+              <button type="button" id="pick-file">画像を選ぶ</button>
+              <button type="button" id="sample-button" class="quiet">
+                サンプルで試す
+              </button>
+            </div>
+          </div>
         </div>
-        <p class="hint">
-          <span id="palette-status">学習パレット: 確認中…</span>
-          <span id="format-status"></span>
-          <span id="camera-status"></span>
-          <span id="perf-status"></span>
-        </p>
-        <p class="hint" id="roi-hint">画像を読み込んでください。</p>
-        <div class="canvas-wrap">
-          <canvas id="source-canvas"></canvas>
+
+        <div class="stage-bar">
+          <div class="stage-actions">
+            <button type="button" id="capture-button" hidden>この画で止める</button>
+            <button type="button" id="reset-button" hidden class="quiet">入力を変える</button>
+            <select id="camera-select" hidden aria-label="カメラの選択"></select>
+          </div>
+          <p class="status" id="status-line">画像またはカメラを選んでください。</p>
         </div>
+
+        <input type="file" id="file-input" class="visually-hidden" />
       </section>
 
-      <section class="result-card">
-        <h2>2. 読み取り結果</h2>
-        <output id="reading" class="reading">?</output>
-        <dl id="reading-detail" class="detail"></dl>
-      </section>
+      <!-- 右: 結果と学習 -->
+      <div class="side">
+        <section class="card result" aria-label="読み取り結果">
+          <output id="reading" class="reading">?</output>
+          <p class="reading-note" id="reading-note"></p>
+          <details class="subfold">
+            <summary>内訳</summary>
+            <dl id="reading-detail" class="detail"></dl>
+          </details>
+        </section>
 
-      <details class="fold">
-        <summary>ROI と 1D カラープロファイル</summary>
-        <p class="hint">列ごとの中央値を Lab に変換したもの。上段が色、下段が L*。</p>
-        <div class="canvas-wrap">
-          <canvas id="roi-canvas" class="roi"></canvas>
-        </div>
-        <div class="canvas-wrap">
-          <canvas id="profile-canvas" class="roi"></canvas>
-        </div>
-      </details>
-
-      <details class="fold">
-        <summary>バンド抽出と分類（推測。誤っていれば直せます）</summary>
-        <p class="hint">
-          色のプルダウンを直すと、下の「正解ラベル」が更新されます。修正した
-          ラベルは <code>sample/labels.json</code> に貼ると較正に反映されます。
-        </p>
-        <div class="canvas-wrap">
-          <table id="bands-table">
-          <thead>
-            <tr>
-              <th>#</th>
-              <th>推測</th>
-              <th>修正</th>
-              <th>位置</th>
-              <th>幅</th>
-              <th>確信度</th>
-            </tr>
-          </thead>
-          <tbody></tbody>
-          </table>
-        </div>
-        <p class="hint" id="bands-empty">まだ解析していません。</p>
-      </details>
-
-      <section class="learn-card">
-        <h2>3. 値で学習</h2>
-        <p class="hint">
-          映っている抵抗の<strong>正解値</strong>を入力して「学習」を押すと、
-          値から逆算したバンド列を検出結果に対応付け、基準色を実写に合わせて
-          較正します。色名を選ぶ必要はありません。
-        </p>
-        <div class="controls">
-          <label>
-            値
-            <input type="text" id="learn-value" size="10" placeholder="4.7k" />
-          </label>
-          <label>
-            許容差
-            <select id="learn-tolerance">
-              <option value="5" selected>±5%（金）</option>
-              <option value="1">±1%（茶）</option>
-              <option value="2">±2%（赤）</option>
-              <option value="10">±10%（銀）</option>
-              <option value="0.5">±0.5%（緑）</option>
-              <option value="none">なし</option>
+        <section class="card learn" aria-label="値で学習">
+          <h2>値で学習</h2>
+          <p class="hint">
+            映っている抵抗の<strong>正解値</strong>を入れて学習させると、基準色が
+            実写に寄って読み取りが良くなります。色名を選ぶ必要はありません。
+          </p>
+          <div class="learn-row">
+            <input
+              type="text"
+              id="learn-value"
+              placeholder="4.7k"
+              enterkeyhint="done"
+              aria-label="抵抗値"
+            />
+            <select id="learn-tolerance" aria-label="許容差">
+              <option value="5" selected>±5% 金</option>
+              <option value="1">±1% 茶</option>
+              <option value="2">±2% 赤</option>
+              <option value="10">±10% 銀</option>
+              <option value="0.5">±0.5% 緑</option>
+              <option value="none">許容差なし</option>
             </select>
-          </label>
-          <button type="button" id="learn-button">この値で学習</button>
-          <span class="hint" id="learn-status"></span>
-        </div>
-        <p class="hint" id="learn-counts"></p>
-        <div class="controls">
-          <button type="button" id="learn-export">学習結果をコピー（palette.json 用）</button>
-          <button type="button" id="learn-clear">学習をリセット</button>
-        </div>
-      </section>
+            <button type="button" id="learn-button" class="primary">学習</button>
+          </div>
+          <p class="status" id="learn-status"></p>
+          <p class="status muted" id="learn-counts"></p>
+          <p class="minor-actions">
+            <button type="button" id="learn-export" class="link">学習結果をコピー</button>
+            <button type="button" id="learn-clear" class="link">リセット</button>
+          </p>
+        </section>
+      </div>
 
-      <details class="fold">
-        <summary>正解ラベル（バンド列を直す場合）</summary>
-        <div class="controls">
-          <label>
-            ファイル名
-            <input type="text" id="label-name" size="30" placeholder="20-2.2kohm-5pct.jpg" />
-          </label>
-          <button type="button" id="save-label">このラベルを保存</button>
-          <button type="button" id="copy-label">全部コピー</button>
-          <button type="button" id="clear-labels">消去</button>
-          <span class="hint" id="label-count">保存済み 0 件</span>
-          <span class="hint" id="copy-status"></span>
-        </div>
-        <p class="hint">
-          保存したラベルはブラウザに残ります。「全部コピー」で
-          <code>sample/labels.json</code> にそのまま貼れます。
-        </p>
-        <pre id="label-json" class="code">（バンドを検出すると表示されます）</pre>
-      </details>
+      <!-- 下: 開発者向けの詳細 -->
+      <div class="advanced">
+        <details class="fold">
+          <summary>設定</summary>
+          <div class="controls">
+            <label>
+              <input type="checkbox" id="auto-toggle" checked />
+              抵抗器を自動検出（傾きも補正）
+            </label>
+            <label>
+              <input type="checkbox" id="adapt-toggle" checked />
+              色順応補正（本体色を基準に色被りを補正）
+            </label>
+          </div>
+          <p class="status muted" id="engine-status"></p>
+          <p class="hint">
+            自動検出を切ると、画像をドラッグして解析範囲を手で指定できます。
+          </p>
+        </details>
+
+        <details class="fold">
+          <summary>解析の中身（ROI・カラープロファイル）</summary>
+          <p class="hint">列ごとの中央値を Lab に変換したもの。上段が色、下段が L*。</p>
+          <div class="canvas-wrap">
+            <canvas id="roi-canvas" class="roi"></canvas>
+          </div>
+          <div class="canvas-wrap">
+            <canvas id="profile-canvas" class="roi"></canvas>
+          </div>
+        </details>
+
+        <details class="fold">
+          <summary>バンドの推測と手直し</summary>
+          <p class="hint">
+            色が誤っていればプルダウンで直せます。直した内容は下の「正解ラベル」
+            に出るので、<code>sample/labels.json</code> に貼れます。
+          </p>
+          <div class="canvas-wrap">
+            <table id="bands-table">
+              <thead>
+                <tr>
+                  <th>#</th>
+                  <th>推測</th>
+                  <th>修正</th>
+                  <th>位置</th>
+                  <th>幅</th>
+                  <th>確信度</th>
+                </tr>
+              </thead>
+              <tbody></tbody>
+            </table>
+          </div>
+          <p class="hint" id="bands-empty">まだ解析していません。</p>
+
+          <div class="controls">
+            <label>
+              ファイル名
+              <input type="text" id="label-name" size="24" placeholder="20-2.2kohm-5pct.jpg" />
+            </label>
+            <button type="button" id="save-label">ラベルを保存</button>
+            <button type="button" id="copy-label" class="link">全部コピー</button>
+            <button type="button" id="clear-labels" class="link">消去</button>
+            <span class="status muted" id="label-count">保存済み 0 件</span>
+            <span class="status" id="copy-status"></span>
+          </div>
+          <pre id="label-json" class="code">（バンドを検出すると表示されます）</pre>
+        </details>
+      </div>
     </main>
 
     <div class="sticky-bar" id="sticky-bar" hidden>
       <output id="sticky-reading" class="sticky-reading">?</output>
-      <button type="button" id="sticky-learn">値で学習</button>
+      <button type="button" id="sticky-learn" class="primary">値で学習</button>
     </div>
 
     <script type="module" src="./main.ts"></script>

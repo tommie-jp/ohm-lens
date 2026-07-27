@@ -39,42 +39,61 @@ interface Rect {
 
 const elements = {
   fileInput: requireElement<HTMLInputElement>('#file-input'),
+  pickFile: requireElement<HTMLButtonElement>('#pick-file'),
   sampleButton: requireElement<HTMLButtonElement>('#sample-button'),
+  cameraButton: requireElement<HTMLButtonElement>('#camera-button'),
+  captureButton: requireElement<HTMLButtonElement>('#capture-button'),
+  resetButton: requireElement<HTMLButtonElement>('#reset-button'),
+  cameraSelect: requireElement<HTMLSelectElement>('#camera-select'),
+  emptyState: requireElement<HTMLDivElement>('#empty-state'),
+  statusLine: requireElement<HTMLParagraphElement>('#status-line'),
+  engineStatus: requireElement<HTMLParagraphElement>('#engine-status'),
+  autoToggle: requireElement<HTMLInputElement>('#auto-toggle'),
   adaptToggle: requireElement<HTMLInputElement>('#adapt-toggle'),
-  roiHint: requireElement<HTMLParagraphElement>('#roi-hint'),
   sourceCanvas: requireElement<HTMLCanvasElement>('#source-canvas'),
   roiCanvas: requireElement<HTMLCanvasElement>('#roi-canvas'),
   profileCanvas: requireElement<HTMLCanvasElement>('#profile-canvas'),
   bandsTable: requireElement<HTMLTableElement>('#bands-table'),
   bandsEmpty: requireElement<HTMLParagraphElement>('#bands-empty'),
   reading: requireElement<HTMLOutputElement>('#reading'),
+  readingNote: requireElement<HTMLParagraphElement>('#reading-note'),
   readingDetail: requireElement<HTMLDListElement>('#reading-detail'),
   labelName: requireElement<HTMLInputElement>('#label-name'),
   labelJson: requireElement<HTMLPreElement>('#label-json'),
   copyLabel: requireElement<HTMLButtonElement>('#copy-label'),
   copyStatus: requireElement<HTMLSpanElement>('#copy-status'),
-  autoToggle: requireElement<HTMLInputElement>('#auto-toggle'),
   saveLabel: requireElement<HTMLButtonElement>('#save-label'),
   clearLabels: requireElement<HTMLButtonElement>('#clear-labels'),
   labelCount: requireElement<HTMLSpanElement>('#label-count'),
-  paletteStatus: requireElement<HTMLSpanElement>('#palette-status'),
-  formatStatus: requireElement<HTMLSpanElement>('#format-status'),
-  cameraButton: requireElement<HTMLButtonElement>('#camera-button'),
-  captureButton: requireElement<HTMLButtonElement>('#capture-button'),
-  cameraSelect: requireElement<HTMLSelectElement>('#camera-select'),
-  cameraStatus: requireElement<HTMLSpanElement>('#camera-status'),
   learnValue: requireElement<HTMLInputElement>('#learn-value'),
   learnTolerance: requireElement<HTMLSelectElement>('#learn-tolerance'),
   learnButton: requireElement<HTMLButtonElement>('#learn-button'),
-  learnStatus: requireElement<HTMLSpanElement>('#learn-status'),
+  learnStatus: requireElement<HTMLParagraphElement>('#learn-status'),
   learnCounts: requireElement<HTMLParagraphElement>('#learn-counts'),
   learnExport: requireElement<HTMLButtonElement>('#learn-export'),
   learnClear: requireElement<HTMLButtonElement>('#learn-clear'),
-  perfStatus: requireElement<HTMLSpanElement>('#perf-status'),
   stickyBar: requireElement<HTMLDivElement>('#sticky-bar'),
   stickyReading: requireElement<HTMLOutputElement>('#sticky-reading'),
   stickyLearn: requireElement<HTMLButtonElement>('#sticky-learn'),
 };
+
+/**
+ * ステータス行の各項目。1 本の文にまとめて出す。
+ * 以前は span を 4 つ並べていたが、何がどれか分からなかった。
+ */
+const statusParts: {
+  input: string;
+  detection: string;
+  performance: string;
+} = { input: '', detection: '', performance: '' };
+
+function renderStatus(): void {
+  const parts = [statusParts.input, statusParts.detection, statusParts.performance].filter(
+    (part) => part !== '',
+  );
+  elements.statusLine.textContent =
+    parts.length === 0 ? '画像またはカメラを選んでください。' : parts.join(' ・ ');
+}
 
 /** 選択肢に出すバンド色。 */
 const BAND_COLORS: readonly BandColor[] = [
@@ -125,6 +144,9 @@ function requireElement<T extends Element>(selector: string): T {
 
 function setSource(canvas: HTMLCanvasElement): void {
   source = canvas;
+  elements.emptyState.hidden = true;
+  elements.sourceCanvas.hidden = false;
+  elements.resetButton.hidden = false;
   updateStickyBar();
   elements.sourceCanvas.width = canvas.width;
   elements.sourceCanvas.height = canvas.height;
@@ -137,8 +159,6 @@ function setSource(canvas: HTMLCanvasElement): void {
     width: canvas.width,
     height: Math.max(1, Math.round(canvas.height * 0.4)),
   };
-  elements.roiHint.textContent =
-    'ドラッグで ROI を指定できます（初期値は中央の横帯）。抵抗器の本体が収まるように囲んでください。';
   analyzeSelection();
 }
 
@@ -217,17 +237,19 @@ function buildRoi(): RoiImage | null {
     const image: RoiImage = { width: full.width, height: full.height, data: full.data };
     const box = locateResistor(image);
     if (box === null) {
-      elements.roiHint.textContent = '抵抗器を自動検出できませんでした。手動指定に切り替えてください。';
+      statusParts.detection = '抵抗器を検出できません';
+      renderStatus();
       return null;
     }
     detectedBox = box;
-    elements.roiHint.textContent =
-      `自動検出: 角度 ${box.angleDeg.toFixed(1)}度 / 長さ ${Math.round(box.length)}px。` +
-      ' ドラッグしたい場合は「自動検出」を外してください。';
+    statusParts.detection = `検出 ${box.angleDeg.toFixed(0)}° / ${Math.round(box.length)}px`;
+    renderStatus();
     return rectify(image, box, { padding: ROI_PADDING, targetHeight: ROI_HEIGHT });
   }
 
   detectedBox = null;
+  statusParts.detection = '手動指定';
+  renderStatus();
   if (selection === null || selection.width < 1 || selection.height < 1) return null;
   const roi = context.getImageData(
     Math.round(selection.x),
@@ -356,13 +378,13 @@ async function loadPaletteFromServer(): Promise<void> {
     const colors = parsed.colors ?? {};
     const count = Object.keys(colors).length;
     if (count === 0) {
-      elements.paletteStatus.textContent = '学習パレット: なし（既定の基準色を使用）';
+      elements.engineStatus.textContent = '共有パレット: なし（既定の基準色）';
       return;
     }
     palette = withOverrides(DEFAULT_PALETTE, colors as Parameters<typeof withOverrides>[1]);
-    elements.paletteStatus.textContent = `学習パレット: ${count} 色を適用中`;
+    elements.engineStatus.textContent = `共有パレット: ${count} 色を適用中`;
   } catch {
-    elements.paletteStatus.textContent = '学習パレット: なし（既定の基準色を使用）';
+    elements.engineStatus.textContent = '共有パレット: なし（既定の基準色）';
   }
 }
 
@@ -371,10 +393,21 @@ function renderReading(result: AnalysisResult): void {
   elements.reading.textContent = text;
   elements.stickyReading.textContent = text;
 
+  // 「?」だけだと理由が分からないので、何と読めたか・なぜ出さないかを添える
+  if (result.reading === null) {
+    elements.readingNote.textContent =
+      result.bands.length === 0 ? 'バンドを検出できません' : '値として解釈できません';
+  } else if (result.reading.confidence < MIN_REPORTABLE_CONFIDENCE) {
+    elements.readingNote.textContent =
+      `確信度 ${result.reading.confidence.toFixed(2)} が低いため未確定` +
+      `（候補 ${formatOhms(result.reading.ohms)}）`;
+  } else {
+    elements.readingNote.textContent = `確信度 ${result.reading.confidence.toFixed(2)}`;
+  }
+
   const rows: [string, string][] = [];
   if (result.reading !== null) {
     const reading = result.reading;
-    // 閾値未満でも、デバッグ用途では「何と読めたか」を確認できるようにする
     const suppressed =
       reading.confidence < MIN_REPORTABLE_CONFIDENCE
         ? `（閾値未満: ${formatOhms(reading.ohms)}）`
@@ -406,11 +439,13 @@ function formatLab(lab: LabColor): string {
 }
 
 async function loadFile(file: File): Promise<void> {
-  elements.roiHint.textContent = `${file.name} を読み込み中…`;
+  statusParts.input = `${file.name} を読み込み中…`;
+  renderStatus();
   const decoded = await decodeImageFile(file);
   elements.labelName.value = file.name;
-  elements.formatStatus.textContent =
-    `形式: ${decoded.format.toUpperCase()}` + (decoded.converted ? '（変換して表示）' : '');
+  statusParts.input =
+    `${file.name}（${decoded.format.toUpperCase()}` + (decoded.converted ? '・変換済' : '') + '）';
+  renderStatus();
   setSource(decoded.canvas);
 }
 
@@ -430,8 +465,9 @@ function stopCamera(): void {
   camera?.stop();
   camera = null;
   setCameraRunning(false);
-  elements.cameraStatus.textContent = '';
-  elements.perfStatus.textContent = '';
+  statusParts.input = '';
+  statusParts.performance = '';
+  renderStatus();
   void releaseWakeLock();
 }
 
@@ -451,7 +487,9 @@ async function refreshCameraList(): Promise<void> {
 
 async function beginCamera(deviceId?: string): Promise<void> {
   stopCamera();
-  elements.cameraStatus.textContent = 'カメラを起動中…';
+  statusParts.input = 'カメラを起動中…';
+  statusParts.performance = '';
+  renderStatus();
 
   try {
     camera = await startCamera({
@@ -462,15 +500,16 @@ async function beginCamera(deviceId?: string): Promise<void> {
         analyzeSelection();
       },
       onStats: (stats, analysisPx) => {
-        elements.perfStatus.textContent =
-          `${stats.fps.toFixed(1)}fps / ${stats.meanMs.toFixed(0)}ms / 解析 ${analysisPx}px`;
+        statusParts.performance = `${stats.fps.toFixed(1)}fps ${stats.meanMs.toFixed(0)}ms ${analysisPx}px`;
+        renderStatus();
       },
       onError: (error) => {
         console.error(error);
       },
     });
   } catch (error) {
-    elements.cameraStatus.textContent = describeCameraError(error);
+    statusParts.input = describeCameraError(error);
+    renderStatus();
     setCameraRunning(false);
     return;
   }
@@ -478,9 +517,11 @@ async function beginCamera(deviceId?: string): Promise<void> {
   setCameraRunning(true);
   void requestWakeLock();
   const { status } = camera;
-  elements.cameraStatus.textContent =
-    `${status.label} ${status.width}x${status.height}` +
-    (status.manualColorLocked ? ' / WB・露出を固定' : ' / WB・露出は自動（この環境では固定不可）');
+  statusParts.input = `${status.label} ${status.width}×${status.height}`;
+  renderStatus();
+  elements.engineStatus.textContent =
+    (elements.engineStatus.textContent ?? '') +
+    (status.manualColorLocked ? ' / WB・露出を固定できました' : ' / WB・露出は自動（固定不可）');
   await refreshCameraList();
 }
 
@@ -602,7 +643,8 @@ elements.captureButton.addEventListener('click', () => {
   context2d(frozen).drawImage(source, 0, 0);
   stopCamera();
   elements.labelName.value = '';
-  elements.formatStatus.textContent = '形式: カメラ静止画';
+  statusParts.input = 'カメラ静止画';
+  renderStatus();
   setSource(frozen);
 });
 
@@ -617,12 +659,39 @@ elements.fileInput.addEventListener('change', () => {
   if (file === undefined) return;
   loadFile(file).catch((error: unknown) => {
     console.error(error);
-    elements.roiHint.textContent = `画像を読み込めませんでした: ${String(error)}`;
+    statusParts.input = `読み込めませんでした: ${String(error)}`;
+    renderStatus();
   });
 });
 
+/** 画像選択は隠した input を代理で押す（見た目を揃えるため）。 */
+elements.pickFile.addEventListener('click', () => {
+  elements.fileInput.click();
+});
+
 elements.sampleButton.addEventListener('click', () => {
+  statusParts.input = '合成サンプル';
+  renderStatus();
   setSource(createSampleCanvas());
+});
+
+/** 入力をやり直す。空状態に戻して選び直せるようにする。 */
+elements.resetButton.addEventListener('click', () => {
+  stopCamera();
+  source = null;
+  detectedBox = null;
+  lastResult = null;
+  elements.sourceCanvas.hidden = true;
+  elements.emptyState.hidden = false;
+  elements.resetButton.hidden = true;
+  elements.fileInput.value = '';
+  statusParts.input = '';
+  statusParts.detection = '';
+  renderStatus();
+  updateStickyBar();
+  elements.reading.textContent = '?';
+  elements.stickyReading.textContent = '?';
+  elements.readingNote.textContent = '';
 });
 
 elements.adaptToggle.addEventListener('change', analyzeSelection);
