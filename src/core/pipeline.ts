@@ -2,6 +2,7 @@ import type { Band, LabColor, ProfileSample, ResistorReading } from '../types.js
 import { extractProfile, type ProfileOptions, type RoiImage } from './bands/profile.js';
 import { segmentBands, type SegmentOptions } from './bands/segment.js';
 import { bodyExtent, type BodyExtent, type BodyExtentOptions } from './bands/extent.js';
+import { normalizeLightness, type NormalizeOptions } from './bands/normalize.js';
 import { readResistor } from './value/decode.js';
 import { buildBodyAnchorAdaptation } from './color/anchor.js';
 import { adaptToAnchor } from './color/whiteBalance.js';
@@ -26,11 +27,20 @@ export interface AnalyzeOptions {
   readonly profile?: ProfileOptions;
   readonly segment?: SegmentOptions;
   readonly extent?: BodyExtentOptions;
+  readonly normalize?: NormalizeOptions;
   /**
    * 本体色をアンカーにした色順応補正を行うか。
    * WB ロックできない環境（Safari）では有効にする。既定は有効。
    */
   readonly adaptWhiteBalance?: boolean;
+  /**
+   * 円筒形ボディの陰影勾配を明度の局所正規化で取り除くか。
+   *
+   * **既定は無効。** sample/ の 39 枚で計測した限りでは正解率が改善せず
+   * （18% → 15%、差は 1 枚で誤差の範囲）、効果を確認できていないため。
+   * 基準色を較正したあとに再評価する価値はある。
+   */
+  readonly normalizeShading?: boolean;
 }
 
 export interface AnalysisResult {
@@ -55,7 +65,14 @@ function applyAdaptation(
 /** ROI 画像を解析して抵抗値を読み取る。 */
 export function analyzeRoi(image: RoiImage, options: AnalyzeOptions = {}): AnalysisResult {
   const shouldAdapt = options.adaptWhiteBalance ?? true;
-  const rawProfile = extractProfile(image, options.profile ?? {});
+  const extracted = extractProfile(image, options.profile ?? {});
+
+  // 円筒形ボディの陰影勾配を先に落とす。残したままランを切ると、
+  // 本体の途中に余計な切れ目が入って本数が合わなくなる。
+  const rawProfile =
+    options.normalizeShading === true
+      ? normalizeLightness(extracted, options.normalize ?? {})
+      : extracted;
 
   // 1 回目: ROI 全体のアンカーで粗く補正し、本体範囲を掴む
   const coarse = shouldAdapt ? buildBodyAnchorAdaptation(rawProfile) : null;
