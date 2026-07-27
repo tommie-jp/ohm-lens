@@ -142,8 +142,8 @@ describe('segmentBands', () => {
     expect(bands[0]?.confidence).toBeLessThanOrEqual(1);
   });
 
-  it('本体色の閾値を指定できる', () => {
-    // Arrange: 本体色に近いが少しずれた色。閾値を広げれば本体として除去される
+  it('本体色に近い区間はクラスタ閾値しだいで本体に含まれる', () => {
+    // Arrange: 本体色に近いが少しずれた色
     const offBody: [number, number, number] = [205, 178, 138];
     const profile = profileOf([
       [null, 5],
@@ -151,7 +151,8 @@ describe('segmentBands', () => {
       [null, 5],
     ]);
 
-    // Act / Assert
-    expect(segmentBands(profile, { bodyDeltaE: 30 })).toEqual([]);
+    // Act / Assert: 閾値を広げれば本体として吸収され、絞ればバンドになる
+    expect(segmentBands(profile, { edgeDeltaE: 1, clusterDeltaE: 20 })).toEqual([]);
+    expect(segmentBands(profile, { edgeDeltaE: 1, clusterDeltaE: 0.5 })).toHaveLength(1);
   });
 });

@@ -1,69 +1,53 @@
-import type { Band, BandColor, ProfileSample } from '../../types.js';
-import { classifyBandColor, isBodyColor } from './classify.js';
+import type { Band, ProfileSample } from '../../types.js';
+import { classifyBandColor } from './classify.js';
+import { identifyBody, splitRuns, type ColorRun } from './runs.js';
 
 export interface SegmentOptions {
-  /** 本体色とみなす ΔE の閾値 */
-  readonly bodyDeltaE?: number;
+  /** 隣接サンプルの ΔE がこれを超えたら切れ目とみなす */
+  readonly edgeDeltaE?: number;
   /** これ未満の幅のランはノイズとして捨てる */
   readonly minBandWidth?: number;
-}
-
-const DEFAULT_MIN_BAND_WIDTH = 2;
-
-interface Run {
-  readonly color: BandColor;
-  readonly start: number;
-  end: number;
-  confidenceSum: number;
+  /** 同じ色のランとみなす ΔE（本体ランをまとめるのに使う） */
+  readonly clusterDeltaE?: number;
 }
 
 /**
  * 1D カラープロファイルからバンドを抽出する。
  *
- * 1. 各サンプルを本体色（背景）とバンド色に振り分ける
- * 2. 本体色を除去したうえで、同じ色が連続するランをラベリングする
- * 3. 幅が閾値未満のランはノイズとして捨てる
+ * 1. 色の切れ目でランに分割する（この時点では分類しない）
+ * 2. 最も面積の大きいラン群を本体とみなす
+ * 3. 本体以外のランを、ラン単位で 1 回だけ分類する
  *
- * バンドの確信度は構成サンプルの分類確信度の平均。
+ * 画素ごとに分類してから束ねる方式では、茶/赤のような紛らわしい色で
+ * バンド内の分類が揺れて 1 本のバンドが細切れになる。先にランを切って
+ * から分類することで、分類の曖昧さがバンドの本数に波及しなくなる。
  */
 export function segmentBands(
   profile: readonly ProfileSample[],
   options: SegmentOptions = {},
 ): Band[] {
-  const minBandWidth = options.minBandWidth ?? DEFAULT_MIN_BAND_WIDTH;
+  const runs = splitRuns(profile, {
+    ...(options.edgeDeltaE === undefined ? {} : { edgeDeltaE: options.edgeDeltaE }),
+    ...(options.minBandWidth === undefined ? {} : { minRunLength: options.minBandWidth }),
+  });
 
-  const runs: Run[] = [];
-  let current: Run | null = null;
+  const body = identifyBody(runs, options.clusterDeltaE);
+  if (body === null) return [];
 
-  for (const sample of profile) {
-    if (isBodyColor(sample.lab, options.bodyDeltaE)) {
-      current = null;
-      continue;
-    }
-
-    const classification = classifyBandColor(sample.lab);
-
-    if (current !== null && current.color === classification.color && current.end === sample.x) {
-      current.end = sample.x + 1;
-      current.confidenceSum += classification.confidence;
-      continue;
-    }
-
-    current = {
-      color: classification.color,
-      start: sample.x,
-      end: sample.x + 1,
-      confidenceSum: classification.confidence,
-    };
-    runs.push(current);
-  }
+  const bodyRuns = new Set(body.runIndices);
 
   return runs
-    .filter((run) => run.end - run.start >= minBandWidth)
-    .map((run) => ({
-      color: run.color,
-      start: run.start,
-      end: run.end,
-      confidence: run.confidenceSum / (run.end - run.start),
-    }));
+    .map((run, index) => ({ run, index }))
+    .filter(({ index }) => !bodyRuns.has(index))
+    .map(({ run }) => toBand(run));
+}
+
+function toBand(run: ColorRun): Band {
+  const classification = classifyBandColor(run.lab);
+  return {
+    color: classification.color,
+    start: run.start,
+    end: run.end,
+    confidence: classification.confidence,
+  };
 }

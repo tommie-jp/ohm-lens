@@ -4,7 +4,7 @@ import { describe, expect, it } from 'vitest';
 import { extractProfile } from '../../src/core/bands/profile.js';
 import { locateResistor } from '../../src/core/locate.js';
 import { rectify } from '../../src/core/rectify.js';
-import { isBodyColor } from '../../src/core/bands/classify.js';
+import { identifyBody, splitRuns } from '../../src/core/bands/runs.js';
 import { buildBodyAnchorAdaptation } from '../../src/core/color/anchor.js';
 import { adaptToAnchor } from '../../src/core/color/whiteBalance.js';
 import { deltaE2000, labToRgb } from '../../src/core/color/colorSpace.js';
@@ -24,7 +24,8 @@ const REPORT_PATH = join(import.meta.dirname, '../../calibration.txt');
 
 const ROI_HEIGHT = 40;
 const ROI_PADDING = 0.06;
-const BODY_DELTA_E = 4;
+const EDGE_DELTA_E = 4;
+const CLUSTER_DELTA_E = 4;
 const MIN_RUN_LENGTH = 3;
 
 const DIGITS: BandColor[] = [
@@ -70,31 +71,17 @@ interface Run {
   readonly length: number;
 }
 
-/** 本体色を除いた連続ランを取り出す（分類はしない）。 */
+/** 本体ランを除いた「バンド候補」のランを取り出す（分類はしない）。 */
 function extractRuns(profile: readonly ProfileSample[]): Run[] {
-  const runs: Run[] = [];
-  let current: ProfileSample[] = [];
+  const runs = splitRuns(profile, { edgeDeltaE: EDGE_DELTA_E, minRunLength: MIN_RUN_LENGTH });
+  const body = identifyBody(runs, CLUSTER_DELTA_E);
+  if (body === null) return [];
 
-  const flush = (): void => {
-    if (current.length >= MIN_RUN_LENGTH) {
-      const sorted = (key: (s: ProfileSample) => number): number => {
-        const values = current.map(key).sort((a, b) => a - b);
-        return values[values.length >> 1] as number;
-      };
-      runs.push({
-        lab: { l: sorted((s) => s.lab.l), a: sorted((s) => s.lab.a), b: sorted((s) => s.lab.b) },
-        length: current.length,
-      });
-    }
-    current = [];
-  };
-
-  for (const sample of profile) {
-    if (isBodyColor(sample.lab, BODY_DELTA_E)) flush();
-    else current.push(sample);
-  }
-  flush();
-  return runs;
+  const bodyRuns = new Set(body.runIndices);
+  return runs
+    .map((run, index) => ({ run, index }))
+    .filter(({ index }) => !bodyRuns.has(index))
+    .map(({ run }) => ({ lab: run.lab, length: run.end - run.start }));
 }
 
 /** 現在の基準色に対する総 ΔE。小さいほど「その並びらしい」。 */
