@@ -12,6 +12,8 @@ import { drawProfile } from './profileView.js';
 import { context2d } from './canvas.js';
 import { decodeImageFile } from './decodeImage.js';
 import { SUPPORTED_ACCEPT } from '../core/imageFormat.js';
+import { listCameras, pickPreferredCamera, startCamera, type CameraSession } from './camera.js';
+import { describeCameraError } from './cameraSupport.js';
 
 /**
  * Phase 0 の目視確認ツール。
@@ -48,6 +50,10 @@ const elements = {
   labelCount: requireElement<HTMLSpanElement>('#label-count'),
   paletteStatus: requireElement<HTMLSpanElement>('#palette-status'),
   formatStatus: requireElement<HTMLSpanElement>('#format-status'),
+  cameraButton: requireElement<HTMLButtonElement>('#camera-button'),
+  captureButton: requireElement<HTMLButtonElement>('#capture-button'),
+  cameraSelect: requireElement<HTMLSelectElement>('#camera-select'),
+  cameraStatus: requireElement<HTMLSpanElement>('#camera-status'),
 };
 
 /** 選択肢に出すバンド色。 */
@@ -63,6 +69,7 @@ let source: HTMLCanvasElement | null = null;
 let detectedBox: OrientedBox | null = null;
 let palette: Palette | null = null;
 let savedLabels: LabelMap = loadLabels();
+let camera: CameraSession | null = null;
 let selection: Rect | null = null;
 let dragStart: { x: number; y: number } | null = null;
 
@@ -357,6 +364,88 @@ async function loadFile(file: File): Promise<void> {
     `形式: ${decoded.format.toUpperCase()}` + (decoded.converted ? '（変換して表示）' : '');
   setSource(decoded.canvas);
 }
+
+/** カメラ稼働中は「静止画として扱う」操作を隠す。 */
+function setCameraRunning(running: boolean): void {
+  elements.cameraButton.textContent = running ? 'カメラを停止' : 'カメラを開始';
+  elements.captureButton.hidden = !running;
+  elements.cameraSelect.hidden = !running;
+}
+
+function stopCamera(): void {
+  camera?.stop();
+  camera = null;
+  setCameraRunning(false);
+  elements.cameraStatus.textContent = '';
+}
+
+/** カメラ一覧をプルダウンに反映する（ラベルは権限取得後でないと空になる）。 */
+async function refreshCameraList(): Promise<void> {
+  const cameras = await listCameras();
+  elements.cameraSelect.replaceChildren();
+  cameras.forEach((device, index) => {
+    const option = document.createElement('option');
+    option.value = device.deviceId;
+    option.textContent = device.label === '' ? `カメラ ${index + 1}` : device.label;
+    elements.cameraSelect.append(option);
+  });
+  const preferred = pickPreferredCamera(cameras);
+  if (preferred !== null) elements.cameraSelect.value = preferred.deviceId;
+}
+
+async function beginCamera(deviceId?: string): Promise<void> {
+  stopCamera();
+  elements.cameraStatus.textContent = 'カメラを起動中…';
+
+  try {
+    camera = await startCamera({
+      ...(deviceId === undefined ? {} : { deviceId }),
+      onFrame: (frame) => {
+        source = frame;
+        analyzeSelection();
+      },
+      onError: (error) => {
+        console.error(error);
+      },
+    });
+  } catch (error) {
+    elements.cameraStatus.textContent = describeCameraError(error);
+    setCameraRunning(false);
+    return;
+  }
+
+  setCameraRunning(true);
+  const { status } = camera;
+  elements.cameraStatus.textContent =
+    `${status.label} ${status.width}x${status.height}` +
+    (status.manualColorLocked ? ' / WB・露出を固定' : ' / WB・露出は自動（この環境では固定不可）');
+  await refreshCameraList();
+}
+
+elements.cameraButton.addEventListener('click', () => {
+  if (camera !== null) {
+    stopCamera();
+    return;
+  }
+  void beginCamera();
+});
+
+elements.captureButton.addEventListener('click', () => {
+  if (camera === null || source === null) return;
+  // 現在のフレームを複製してから止める。止めた後も解析・ラベル付けを続けられる。
+  const frozen = document.createElement('canvas');
+  frozen.width = source.width;
+  frozen.height = source.height;
+  context2d(frozen).drawImage(source, 0, 0);
+  stopCamera();
+  elements.labelName.value = '';
+  elements.formatStatus.textContent = '形式: カメラ静止画';
+  setSource(frozen);
+});
+
+elements.cameraSelect.addEventListener('change', () => {
+  void beginCamera(elements.cameraSelect.value);
+});
 
 elements.fileInput.accept = SUPPORTED_ACCEPT;
 

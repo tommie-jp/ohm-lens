@@ -25,6 +25,9 @@
         <div class="controls">
           <input type="file" id="file-input" />
           <button type="button" id="sample-button">合成サンプルを読み込む</button>
+          <button type="button" id="camera-button">カメラを開始</button>
+          <button type="button" id="capture-button" hidden>この画で止める</button>
+          <select id="camera-select" hidden aria-label="カメラの選択"></select>
           <label>
             <input type="checkbox" id="auto-toggle" checked />
             抵抗器を自動検出（角度も補正）
@@ -37,6 +40,7 @@
         <p class="hint">
           <span id="palette-status">学習パレット: 確認中…</span>
           <span id="format-status"></span>
+          <span id="camera-status"></span>
         </p>
         <p class="hint" id="roi-hint">画像を読み込んでください。</p>
         <div class="canvas-wrap">
