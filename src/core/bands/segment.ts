@@ -15,20 +15,19 @@ export interface SegmentOptions {
 }
 
 /**
- * 1D カラープロファイルからバンドを抽出する。
+ * 本体を除いた「バンド候補」のランを取り出す（分類はしない）。
  *
- * 1. 色の切れ目でランに分割する（この時点では分類しない）
+ * 1. 色の切れ目でランに分割する
  * 2. 最も面積の大きいラン群を本体とみなす
- * 3. 本体以外のランを、ラン単位で 1 回だけ分類する
+ * 3. 本体以外のランを返す
  *
- * 画素ごとに分類してから束ねる方式では、茶/赤のような紛らわしい色で
- * バンド内の分類が揺れて 1 本のバンドが細切れになる。先にランを切って
- * から分類することで、分類の曖昧さがバンドの本数に波及しなくなる。
+ * 分類まで済ませた Band が欲しい場合は {@link segmentBands}、
+ * 色候補を残したまま同時デコードに回す場合はこちらを使う。
  */
-export function segmentBands(
+export function bandRuns(
   profile: readonly ProfileSample[],
   options: SegmentOptions = {},
-): Band[] {
+): ColorRun[] {
   const runs = splitRuns(profile, {
     ...(options.edgeDeltaE === undefined ? {} : { edgeDeltaE: options.edgeDeltaE }),
     ...(options.minBandWidth === undefined ? {} : { minRunLength: options.minBandWidth }),
@@ -38,11 +37,21 @@ export function segmentBands(
   if (body === null) return [];
 
   const bodyRuns = new Set(body.runIndices);
+  return runs.filter((_, index) => !bodyRuns.has(index));
+}
 
-  return runs
-    .map((run, index) => ({ run, index }))
-    .filter(({ index }) => !bodyRuns.has(index))
-    .map(({ run }) => toBand(run, options.palette ?? DEFAULT_PALETTE));
+/**
+ * 1D カラープロファイルからバンドを抽出する。
+ *
+ * 画素ごとに分類してから束ねる方式では、茶/赤のような紛らわしい色で
+ * バンド内の分類が揺れて 1 本のバンドが細切れになる。先にランを切って
+ * から分類することで、分類の曖昧さがバンドの本数に波及しなくなる。
+ */
+export function segmentBands(
+  profile: readonly ProfileSample[],
+  options: SegmentOptions = {},
+): Band[] {
+  return bandRuns(profile, options).map((run) => toBand(run, options.palette ?? DEFAULT_PALETTE));
 }
 
 function toBand(run: ColorRun, palette: Palette): Band {

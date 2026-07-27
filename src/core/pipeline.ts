@@ -1,9 +1,10 @@
 import type { Band, LabColor, ProfileSample, ResistorReading } from '../types.js';
 import { extractProfile, type ProfileOptions, type RoiImage } from './bands/profile.js';
-import { segmentBands, type SegmentOptions } from './bands/segment.js';
+import { bandRuns, segmentBands, type SegmentOptions } from './bands/segment.js';
 import { bodyExtent, type BodyExtent, type BodyExtentOptions } from './bands/extent.js';
 import { normalizeLightness, type NormalizeOptions } from './bands/normalize.js';
 import { readResistor } from './value/decode.js';
+import { jointReadResistor } from './value/jointDecode.js';
 import { buildBodyAnchorAdaptation } from './color/anchor.js';
 import { adaptToAnchor } from './color/whiteBalance.js';
 import type { Adaptation } from './color/whiteBalance.js';
@@ -88,9 +89,16 @@ export function analyzeRoi(image: RoiImage, options: AnalyzeOptions = {}): Analy
   const extent = bodyExtent(profile, options.extent ?? {}) ?? coarseExtent;
   const analysed = extent === null ? profile : profile.slice(extent.start, extent.end);
 
-  const bands = segmentBands(analysed, options.segment ?? {});
+  const segmentOptions = options.segment ?? {};
+  const runs = bandRuns(analysed, segmentOptions);
+  const bands = segmentBands(analysed, segmentOptions);
   const roiLength = extent === null ? image.width : extent.end - extent.start;
-  const reading = bands.length === 0 ? null : readResistor(bands, roiLength);
+
+  // 同時デコード（色候補 × カラーコード表 × E系列で全体最適）を優先し、
+  // 解が出なければ従来の「独立分類 → デコード」に落とす
+  const reading =
+    jointReadResistor(runs, segmentOptions.palette === undefined ? {} : { palette: segmentOptions.palette }) ??
+    (bands.length === 0 ? null : readResistor(bands, roiLength));
 
   return { profile, extent, bands, reading, anchor: refined?.anchor ?? coarse?.anchor ?? null };
 }
