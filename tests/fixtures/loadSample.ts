@@ -18,6 +18,11 @@ const SAMPLE_DIR = join(import.meta.dirname, '../../../sample');
 /** 解析前に縮小する長辺の画素数。元は 3000px 級で、そのままだと遅い。 */
 const DECODE_MAX_SIZE = 800;
 
+/** フィクスチャとして扱う拡張子。 */
+export const SAMPLE_EXTENSIONS = [
+  '.jpg', '.jpeg', '.png', '.webp', '.gif', '.avif', '.heic', '.heif', '.tif', '.tiff',
+] as const;
+
 export interface SampleEntry {
   readonly file: string;
   readonly ohms: number;
@@ -52,7 +57,12 @@ export function loadManifest(): SampleEntry[] {
     }));
 }
 
-/** 写真を RGBA の生ピクセルとして読み込む（長辺 800px に縮小）。 */
+/**
+ * 写真を RGBA の生ピクセルとして読み込む（長辺 800px に縮小）。
+ *
+ * sharp が対応する形式（JPEG / PNG / WebP / GIF / AVIF / HEIC / TIFF）を
+ * そのまま扱える。EXIF の向きも反映する。
+ */
 export async function loadImage(file: string): Promise<RoiImage> {
   const { data, info } = await sharp(join(SAMPLE_DIR, file))
     .rotate() // EXIF の向きを反映

@@ -10,6 +10,8 @@ import type { Band, BandColor, LabColor } from '../types.js';
 import { createSampleCanvas } from './sample.js';
 import { drawProfile } from './profileView.js';
 import { context2d } from './canvas.js';
+import { decodeImageFile } from './decodeImage.js';
+import { SUPPORTED_ACCEPT } from '../core/imageFormat.js';
 
 /**
  * Phase 0 の目視確認ツール。
@@ -45,6 +47,7 @@ const elements = {
   clearLabels: requireElement<HTMLButtonElement>('#clear-labels'),
   labelCount: requireElement<HTMLSpanElement>('#label-count'),
   paletteStatus: requireElement<HTMLSpanElement>('#palette-status'),
+  formatStatus: requireElement<HTMLSpanElement>('#format-status'),
 };
 
 /** 選択肢に出すバンド色。 */
@@ -347,15 +350,15 @@ function formatLab(lab: LabColor): string {
 }
 
 async function loadFile(file: File): Promise<void> {
-  const bitmap = await createImageBitmap(file);
-  const canvas = document.createElement('canvas');
-  canvas.width = bitmap.width;
-  canvas.height = bitmap.height;
-  context2d(canvas).drawImage(bitmap, 0, 0);
-  bitmap.close();
+  elements.roiHint.textContent = `${file.name} を読み込み中…`;
+  const decoded = await decodeImageFile(file);
   elements.labelName.value = file.name;
-  setSource(canvas);
+  elements.formatStatus.textContent =
+    `形式: ${decoded.format.toUpperCase()}` + (decoded.converted ? '（変換して表示）' : '');
+  setSource(decoded.canvas);
 }
+
+elements.fileInput.accept = SUPPORTED_ACCEPT;
 
 elements.fileInput.addEventListener('change', () => {
   const file = elements.fileInput.files?.[0];

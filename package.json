@@ -17,7 +17,8 @@
     "lint:md": "markdownlint \"**/*.md\""
   },
   "dependencies": {
-    "culori": "^4.0.2"
+    "culori": "^4.0.2",
+    "heic-to": "^1.5.2"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",

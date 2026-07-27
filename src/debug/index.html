@@ -23,7 +23,7 @@
       <section>
         <h2>1. 画像</h2>
         <div class="controls">
-          <input type="file" id="file-input" accept="image/*" />
+          <input type="file" id="file-input" />
           <button type="button" id="sample-button">合成サンプルを読み込む</button>
           <label>
             <input type="checkbox" id="auto-toggle" checked />
@@ -34,7 +34,10 @@
             色順応補正（本体色アンカー）
           </label>
         </div>
-        <p class="hint"><span id="palette-status">学習パレット: 確認中…</span></p>
+        <p class="hint">
+          <span id="palette-status">学習パレット: 確認中…</span>
+          <span id="format-status"></span>
+        </p>
         <p class="hint" id="roi-hint">画像を読み込んでください。</p>
         <div class="canvas-wrap">
           <canvas id="source-canvas"></canvas>

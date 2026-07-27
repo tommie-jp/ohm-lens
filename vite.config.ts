@@ -37,6 +37,9 @@ export default defineConfig({
   build: {
     outDir: '../../dist',
     emptyOutDir: true,
+    // HEIC デコーダ（libheif の WASM、約 3MB）は動的 import で分割してあり、
+    // HEIC を選んだときだけ読み込まれる。分割済みなので警告は不要。
+    chunkSizeWarningLimit: 4096,
   },
   test: {
     globals: true,
