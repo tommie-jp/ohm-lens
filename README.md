@@ -6,7 +6,21 @@ Author: [tommie.jp](https://tommie.jp) ([@tommie-jp](https://github.com/tommie-j
 
 - **当面の URL**: `https://ohmlens.tommie.jp`
 - **方針**: ブラウザ完結（クライアントサイド推論）、サーバ不要
-- **Status**: Phase 0（色帯解析コアロジック）着手前
+- **Status**: Phase 0 実装中（Step 0-1〜0-6 完了、実画像での較正 Step 0-7 が残り）
+
+## 開発
+
+```bash
+npm install
+npm run dev        # Phase 0 デバッグページ（静止画から色帯解析を確認）
+npm test           # 単体テスト
+npm run coverage   # カバレッジ（core/ を対象、閾値 80%）
+npm run lint       # ESLint
+npm run typecheck  # tsc --noEmit
+```
+
+`npm run dev` で開くページの「合成サンプルを読み込む」を押すと、画像が無くても
+パイプライン全体の動作を確認できます。
 
 ## 仕組み
 

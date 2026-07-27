@@ -1,0 +1,80 @@
+<!doctype html>
+<html lang="ja">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>OhmLens — Phase 0 デバッグ</title>
+    <link
+      rel="icon"
+      href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><text y='14' font-size='14'>Ω</text></svg>"
+    />
+    <link rel="stylesheet" href="./style.css" />
+  </head>
+  <body>
+    <header>
+      <h1>OhmLens — Phase 0 デバッグ</h1>
+      <p class="lead">
+        静止画から色帯解析の各段階を確認するツール。画像を読み込み、抵抗器の部分を
+        ドラッグで囲むと ROI として解析します。
+      </p>
+    </header>
+
+    <main>
+      <section>
+        <h2>1. 画像</h2>
+        <div class="controls">
+          <input type="file" id="file-input" accept="image/*" />
+          <button type="button" id="sample-button">合成サンプルを読み込む</button>
+          <label>
+            <input type="checkbox" id="adapt-toggle" checked />
+            色順応補正（本体色アンカー）
+          </label>
+        </div>
+        <p class="hint" id="roi-hint">画像を読み込んでください。</p>
+        <div class="canvas-wrap">
+          <canvas id="source-canvas"></canvas>
+        </div>
+      </section>
+
+      <section>
+        <h2>2. ROI（水平化済みとして扱う切り出し）</h2>
+        <div class="canvas-wrap">
+          <canvas id="roi-canvas" class="roi"></canvas>
+        </div>
+      </section>
+
+      <section>
+        <h2>3. 1D カラープロファイル</h2>
+        <p class="hint">列ごとの中央値を Lab に変換したもの。上段が色、下段が L*。</p>
+        <div class="canvas-wrap">
+          <canvas id="profile-canvas" class="roi"></canvas>
+        </div>
+      </section>
+
+      <section>
+        <h2>4. バンド抽出と分類</h2>
+        <table id="bands-table">
+          <thead>
+            <tr>
+              <th>#</th>
+              <th>色</th>
+              <th>位置</th>
+              <th>幅</th>
+              <th>確信度</th>
+            </tr>
+          </thead>
+          <tbody></tbody>
+        </table>
+        <p class="hint" id="bands-empty">まだ解析していません。</p>
+      </section>
+
+      <section>
+        <h2>5. 読み取り結果</h2>
+        <output id="reading" class="reading">?</output>
+        <dl id="reading-detail" class="detail"></dl>
+      </section>
+    </main>
+
+    <script type="module" src="./main.ts"></script>
+  </body>
+</html>
