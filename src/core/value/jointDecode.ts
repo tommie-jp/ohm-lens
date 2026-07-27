@@ -124,6 +124,9 @@ const SNAP_DEVIATION_LIMIT = 0.02;
 /** 確信度の絶対項: 平均 ΔE がこの値で 0 になる。 */
 const CONFIDENCE_DELTA_CEILING = 40;
 
+/** 次点とのコスト差がこれだけ開いていれば「迷いなし」とみなす。 */
+const CONFIDENCE_MARGIN_SCALE = 4;
+
 interface Candidate {
   readonly color: BandColor;
   readonly deltaE: number;
@@ -315,10 +318,11 @@ export function jointReadResistor(
 
   // 確信度: 色としての絶対的な近さ × 次点との差
   const absolute = Math.max(0, 1 - chosen.meanDeltaE / CONFIDENCE_DELTA_CEILING);
+  // 次点との差は「コストの合計に対する割合」ではなく**固定の尺度**で測る。
+  // 割合にすると、系列や流通範囲の事前分布を足したぶんだけ分母が膨らみ、
+  // 同じ差でも確信度が下がってしまう（事前分布を入れた副作用で実際に起きた）。
   const margin =
-    runnerUp === null
-      ? 0.8
-      : clamp01((runnerUp.cost - chosen.cost) / Math.max(1, runnerUp.cost + chosen.cost));
+    runnerUp === null ? 0.8 : clamp01((runnerUp.cost - chosen.cost) / CONFIDENCE_MARGIN_SCALE);
   const plausibility = METALLIC_DIGIT_CONFIDENCE ** chosen.metallicDigits;
   const confidence = clamp01(absolute * (0.4 + 0.6 * margin) * plausibility);
 
