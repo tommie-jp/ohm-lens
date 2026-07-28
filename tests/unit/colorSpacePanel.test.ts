@@ -42,22 +42,37 @@ describe('projectToPanel', () => {
 describe('buildColorSpaceSvg', () => {
   const observed = [srgb255ToLab(180, 60, 50), srgb255ToLab(40, 40, 40)];
 
-  it('基準色は全カラーコードぶんの赤い + が出る', () => {
+  it('基準色は色名をその色で置く', () => {
     // Arrange / Act
     const svg = buildColorSpaceSvg(DEFAULT_PALETTE, [], { x: 0, y: 0 });
 
     // Assert: 12 色 × 6 面（RGB と Lab、それぞれ立体 1 面と平面 2 面）
-    const plusMarks = svg.match(/class="ref-plus"/g) ?? [];
-    expect(plusMarks).toHaveLength(72);
+    const names = svg.match(/class="ref-name"/g) ?? [];
+    expect(names).toHaveLength(72);
+    expect(svg).toContain('>白<');
+    expect(svg).toContain('>金<');
   });
 
-  it('実測色は本数ぶんの赤い ○ が出る', () => {
+  it('実測色はカラーコードの番号をその色で置く', () => {
     // Act
     const svg = buildColorSpaceSvg(DEFAULT_PALETTE, observed, { x: 0, y: 0 });
 
-    // Assert: 2 本 × 6 面
-    const circles = svg.match(/class="observed-ring"/g) ?? [];
-    expect(circles).toHaveLength(12);
+    // Assert: 2 本 × 6 面。番号は 1 から
+    const numbers = svg.match(/class="observed-number"/g) ?? [];
+    expect(numbers).toHaveLength(12);
+    expect(svg).toContain('>1<');
+    expect(svg).toContain('>2<');
+  });
+
+  it('実測色の番号はその色で塗る', () => {
+    // Arrange: 1 本目は赤っぽい色
+    const svg = buildColorSpaceSvg(DEFAULT_PALETTE, [srgb255ToLab(200, 40, 40)], { x: 0, y: 0 });
+
+    // Act
+    const match = /class="observed-number"[^>]*fill="([^"]+)"/.exec(svg);
+
+    // Assert
+    expect(match?.[1]).toMatch(/^rgb\(2\d\d /);
   });
 
   it('2 次元の面には軸名が出る', () => {

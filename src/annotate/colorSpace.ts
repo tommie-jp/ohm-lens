@@ -34,8 +34,6 @@ const FACE_GAP = 22;
 /** 見出しの高さ [px]。 */
 const TITLE_HEIGHT = 16;
 
-const MARKER_COLOR = '#ff3b30';
-
 /**
  * Lab の a\*・b\* を 0..1 に正規化する範囲。
  * バンド色は概ねこの中に収まる。外れた値は端に張り付く。
@@ -190,20 +188,37 @@ function frame(origin: Point2, axes: readonly [string, string, string]): string 
   return parts.join('');
 }
 
-/** 基準色の印（赤い +）。色玉と色名を添えて、どれがどの色か分かるようにする。 */
-function referenceMark(at: Point2, css: string, name: string): string {
-  const arm = 4;
+/**
+ * その色自身で文字を書く。
+ *
+ * 白や黄のような明るい色は白地に埋もれるので、明度に応じてフチの色を
+ * 入れ替える（暗い色には白フチ、明るい色には暗いフチ）。
+ */
+function coloredText(
+  at: Point2,
+  text: string,
+  lab: LabColor,
+  size: number,
+  className: string,
+): string {
+  const halo = lab.l > 70 ? 'rgba(60,60,66,0.85)' : 'rgba(255,255,255,0.9)';
   return (
-    `<circle cx="${at.x.toFixed(1)}" cy="${at.y.toFixed(1)}" r="4.5" fill="${css}" ` +
-    `stroke="rgba(0,0,0,0.45)" stroke-width="0.8" />` +
-    `<line class="ref-plus" x1="${(at.x - arm).toFixed(1)}" y1="${at.y.toFixed(1)}" ` +
-    `x2="${(at.x + arm).toFixed(1)}" y2="${at.y.toFixed(1)}" ` +
-    `stroke="${MARKER_COLOR}" stroke-width="1.4" />` +
-    `<line x1="${at.x.toFixed(1)}" y1="${(at.y - arm).toFixed(1)}" ` +
-    `x2="${at.x.toFixed(1)}" y2="${(at.y + arm).toFixed(1)}" ` +
-    `stroke="${MARKER_COLOR}" stroke-width="1.4" />` +
-    label({ x: at.x, y: at.y - 10 }, name, 9, '#33333a', true)
+    `<text class="${className}" x="${at.x.toFixed(1)}" y="${at.y.toFixed(1)}" ` +
+    `font-family="sans-serif" font-size="${size}" font-weight="700" ` +
+    `text-anchor="middle" dominant-baseline="central" ` +
+    `stroke="${halo}" stroke-width="${(size * 0.3).toFixed(1)}" paint-order="stroke" ` +
+    `fill="${labToCss(lab)}">${text}</text>`
   );
+}
+
+/** 基準色の印。色名をその色で書く。 */
+function referenceMark(at: Point2, lab: LabColor, name: string): string {
+  return coloredText(at, name, lab, 10, 'ref-name');
+}
+
+/** 実測色の印。カラーコードの番号をその色で書く（画像に焼いた番号と対応）。 */
+function observedMark(at: Point2, lab: LabColor, number: number): string {
+  return coloredText(at, String(number), lab, 13, 'observed-number');
 }
 
 /**
@@ -240,16 +255,6 @@ function onPlane(origin: Point2, horizontal: number, vertical: number): Point2 {
 
 function clamp01(value: number): number {
   return Math.min(1, Math.max(0, value));
-}
-
-/** 実測色の印（赤い ○）。中は実測色で塗る。 */
-function observedMark(at: Point2, css: string): string {
-  return (
-    `<circle cx="${at.x.toFixed(1)}" cy="${at.y.toFixed(1)}" r="5.5" fill="${css}" ` +
-    `opacity="0.85" />` +
-    `<circle class="observed-ring" cx="${at.x.toFixed(1)}" cy="${at.y.toFixed(1)}" r="5.5" ` +
-    `fill="none" stroke="${MARKER_COLOR}" stroke-width="1.8" />`
-  );
 }
 
 function normalizeChroma(value: number): number {
@@ -315,13 +320,13 @@ export function buildColorSpaceSvg(
     for (const [color, lab] of entries) {
       const [x, y, z] = coords(lab);
       parts.push(
-        referenceMark(place(solidOrigin, projectToPanel(x, y, z)), labToCss(lab), nameOf(color)),
+        referenceMark(place(solidOrigin, projectToPanel(x, y, z)), lab, nameOf(color)),
       );
     }
-    for (const lab of observed) {
+    observed.forEach((lab, number) => {
       const [x, y, z] = coords(lab);
-      parts.push(observedMark(place(solidOrigin, projectToPanel(x, y, z)), labToCss(lab)));
-    }
+      parts.push(observedMark(place(solidOrigin, projectToPanel(x, y, z)), lab, number + 1));
+    });
 
     planes.forEach((plane, column) => {
       const origin: Point2 = {
@@ -333,12 +338,15 @@ export function buildColorSpaceSvg(
           const [h, v] = plane.pick(coords(lab));
           return {
             at: onPlane(origin, h, v),
-            draw: (at: Point2) => referenceMark(at, labToCss(lab), nameOf(color)),
+            draw: (at: Point2) => referenceMark(at, lab, nameOf(color)),
           };
         }),
-        ...observed.map((lab) => {
+        ...observed.map((lab, number) => {
           const [h, v] = plane.pick(coords(lab));
-          return { at: onPlane(origin, h, v), draw: (at: Point2) => observedMark(at, labToCss(lab)) };
+          return {
+            at: onPlane(origin, h, v),
+            draw: (at: Point2) => observedMark(at, lab, number + 1),
+          };
         }),
       ];
       parts.push(planeFace(origin, plane.title, plane.axes, marks));

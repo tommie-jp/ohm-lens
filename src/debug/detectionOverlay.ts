@@ -1,7 +1,7 @@
 import type { Band } from '../types.js';
 import type { OrientedBox } from '../core/locate.js';
 import type { RectifyOptions } from '../core/rectify.js';
-import { bandCorners, labelAnchor } from '../core/roiMapping.js';
+import { bandCorners, labelAnchor, labelSide } from '../core/roiMapping.js';
 import { BAND_COLOR_JA, bandColorCss } from '../core/color/colors.js';
 
 /**
@@ -16,7 +16,6 @@ import { BAND_COLOR_JA, bandColorCss } from '../core/color/colors.js';
 const BOX_COLOR = '#ff3b30';
 
 /** バンド帯の塗り。写真と紛れないよう白の半透明にする。 */
-const BAND_FILL = 'rgb(255 255 255 / 0.28)';
 
 /** ラベルを箱の縁からどれだけ離すか（箱の太さに対する割合）。 */
 const LABEL_OFFSET_RATIO = 0.55;
@@ -95,6 +94,8 @@ export function drawBandLabels(
     Math.min(MAX_LABEL_PX, Math.max(MIN_LABEL_PX, box.thickness * LABEL_SIZE_RATIO)),
   );
   const baseOffset = box.thickness * LABEL_OFFSET_RATIO;
+  // 注釈は水平な抵抗器なら下、垂直なら右に出す
+  const side = labelSide(box);
 
   context.save();
   context.font = `700 ${fontPx}px system-ui, sans-serif`;
@@ -102,20 +103,26 @@ export function drawBandLabels(
   context.textBaseline = 'middle';
 
   bands.forEach((band, index) => {
-    // 帯: バンドの占める範囲を写真の上に示す
-    context.fillStyle = BAND_FILL;
+    // 帯: バンドの占める範囲を示す（塗らない。色帯そのものを隠さないため）
     drawPolygon(context, bandCorners(box, options.rectify, band));
-    context.fill();
     context.strokeStyle = bandColorCss(band.color);
     context.lineWidth = Math.max(1, Math.round(box.thickness / 22));
     context.stroke();
 
+    context.globalAlpha = band.confidence < LOW_CONFIDENCE ? 0.55 : 1;
+
+    // 番号: バンドのすぐ外側。色空間の面に出る番号と対応する
+    const numberAt = labelAnchor(box, options.rectify, band, fontPx * 0.8, side);
+    context.lineWidth = Math.max(2, fontPx * 0.22);
+    context.strokeStyle = 'rgb(255 255 255 / 0.92)';
+    context.strokeText(String(index + 1), numberAt.x, numberAt.y);
+    context.fillStyle = BOX_COLOR;
+    context.fillText(String(index + 1), numberAt.x, numberAt.y);
+
     // ラベル: 詰まって重なるので 1 本ごとに段違いにする
     const stagger = index % 2 === 0 ? 0 : fontPx * 1.15;
-    const anchor = labelAnchor(box, options.rectify, band, baseOffset + stagger + fontPx * 0.8);
+    const anchor = labelAnchor(box, options.rectify, band, baseOffset + stagger + fontPx * 0.8, side);
     const text = (options.japanese ?? true) ? BAND_COLOR_JA[band.color] : band.color;
-
-    context.globalAlpha = band.confidence < LOW_CONFIDENCE ? 0.55 : 1;
 
     // 色玉（金/黄、灰/銀の取り違えを目で確かめられるように）
     const dot = fontPx * 0.32;

@@ -1,7 +1,7 @@
 import type { Band } from '../types.js';
 import type { OrientedBox } from '../core/locate.js';
 import type { RectifyOptions } from '../core/rectify.js';
-import { bandCorners, labelAnchor } from '../core/roiMapping.js';
+import { bandCorners, labelAnchor, labelSide } from '../core/roiMapping.js';
 import { BAND_COLOR_ABBR, BAND_COLOR_JA, bandColorCss } from '../core/color/colors.js';
 import type { UsedRun } from '../core/value/jointDecode.js';
 import type { LabColor } from '../types.js';
@@ -19,7 +19,6 @@ import { buildColorSpaceSvg, COLOR_SPACE_PANEL_HEIGHT } from './colorSpace.js';
  */
 
 const BOX_COLOR = '#ff3b30';
-const BAND_FILL = 'rgba(255,255,255,0.30)';
 
 /** 採用されなかったランの色。捨てた事実が見えるようにする。 */
 const DROPPED_COLOR = '#8e8e93';
@@ -112,6 +111,8 @@ export function buildAnnotationSvg(input: AnnotateInput): string {
     const fontPx = Math.max(12, Math.round(box.thickness * 0.3));
     const usedByIndex = new Map((input.usedRuns ?? []).map((used) => [used.runIndex, used]));
     const dropped = new Set(input.droppedRuns ?? []);
+    // 注釈は水平な抵抗器なら下、垂直なら右に出す
+    const side = labelSide(box);
 
     parts.push(
       `<polygon points="${points(boxCorners(box))}" fill="none" stroke="${BOX_COLOR}" ` +
@@ -123,16 +124,22 @@ export function buildAnnotationSvg(input: AnnotateInput): string {
       const isDropped = dropped.has(index) || (input.usedRuns !== undefined && used === undefined);
       const opacity = isDropped ? 0.5 : 1;
 
-      // バンドの占める範囲
+      // バンドの占める範囲（塗らない。色帯そのものを隠さないため）
       parts.push(
         `<polygon points="${points(bandCorners(box, input.rectify, band))}" ` +
-          `fill="${BAND_FILL}" stroke="${isDropped ? DROPPED_COLOR : bandColorCss(band.color)}" ` +
+          `fill="none" stroke="${isDropped ? DROPPED_COLOR : bandColorCss(band.color)}" ` +
           `stroke-width="2" ${isDropped ? 'stroke-dasharray="4 3"' : ''} />`,
       );
 
-      // ラベルは詰まるので 1 本ごとに段違いにする
+      // 番号はバンドのすぐ外側。色空間の面に出る番号と対応する
+      const number = labelAnchor(box, input.rectify, band, fontPx * 0.8, side);
+      parts.push(
+        textElement(number.x, number.y, String(index + 1), fontPx, BOX_COLOR, opacity),
+      );
+
+      // 色名と意味はさらに外側。詰まるので 1 本ごとに段違いにする
       const stagger = index % 2 === 0 ? 0 : fontPx * 2.4;
-      const anchor = labelAnchor(box, input.rectify, band, box.thickness * 0.5 + stagger + fontPx);
+      const anchor = labelAnchor(box, input.rectify, band, fontPx * 2.4 + stagger, side);
 
       // 色玉（金/黄・灰/銀の取り違えを目で確かめられるように）
       parts.push(

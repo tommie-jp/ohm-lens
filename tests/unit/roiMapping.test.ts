@@ -4,6 +4,7 @@ import {
   bodyColumns,
   imageToRoi,
   labelAnchor,
+  labelSide,
   roiGeometry,
   roiToImage,
 } from '../../src/core/roiMapping.js';
@@ -248,5 +249,51 @@ describe('bodyColumns', () => {
     // Assert
     expect(columns.start).toBe(0);
     expect(columns.end).toBe(geometry.width);
+  });
+});
+
+describe('labelSide / labelAnchor — 注釈を出す向き', () => {
+  it('水平な抵抗器では下側', () => {
+    // Arrange / Act
+    const side = labelSide(BOX);
+    const anchor = labelAnchor(BOX, {}, { start: 10, end: 30 }, 20, side);
+
+    // Assert
+    expect(anchor.y).toBeGreaterThan(BOX.centerY);
+  });
+
+  it('垂直な抵抗器では右側', () => {
+    // Arrange: 長軸が下向き（90 度）
+    const vertical: OrientedBox = { ...BOX, angleDeg: 90 };
+
+    // Act
+    const anchor = labelAnchor(vertical, {}, { start: 10, end: 30 }, 20, labelSide(vertical));
+
+    // Assert
+    expect(anchor.x).toBeGreaterThan(vertical.centerX);
+  });
+
+  it('長軸が上向き（-90 度）でも右側', () => {
+    const vertical: OrientedBox = { ...BOX, angleDeg: -90 };
+
+    const anchor = labelAnchor(vertical, {}, { start: 10, end: 30 }, 20, labelSide(vertical));
+
+    expect(anchor.x).toBeGreaterThan(vertical.centerX);
+  });
+
+  it('上下逆さま（180 度）でも下側', () => {
+    const upsideDown: OrientedBox = { ...BOX, angleDeg: 180 };
+
+    const anchor = labelAnchor(upsideDown, {}, { start: 10, end: 30 }, 20, labelSide(upsideDown));
+
+    expect(anchor.y).toBeGreaterThan(upsideDown.centerY);
+  });
+
+  it('オフセットを大きくするとさらに離れる', () => {
+    const side = labelSide(BOX);
+    const near = labelAnchor(BOX, {}, { start: 10, end: 30 }, 10, side);
+    const far = labelAnchor(BOX, {}, { start: 10, end: 30 }, 40, side);
+
+    expect(far.y).toBeGreaterThan(near.y);
   });
 });

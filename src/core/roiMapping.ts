@@ -155,26 +155,56 @@ export function bandCorners(
 }
 
 /**
+ * 注釈を出す側。ROI の y=0 側か y=height 側か。
+ * 元画像でどちら向きになるかは箱の角度で変わる。
+ */
+export type LabelSide = 'roiTop' | 'roiBottom';
+
+/**
+ * 注釈を出す側を決める。
+ *
+ * **水平な抵抗器なら下、垂直なら右**に出す。文字が抵抗器の上に重なると
+ * 色帯が見えなくなるので外へ出すが、上や左に出すと画像の縁に切れやすく、
+ * 何より並びが読みにくい。
+ */
+export function labelSide(box: OrientedBox): LabelSide {
+  const rad = (box.angleDeg * Math.PI) / 180;
+  const cos = Math.cos(rad);
+  const sin = Math.sin(rad);
+
+  // ROI の y=height 側へ出る向き（roiToImage の across 成分と同じ）
+  const toBottom = { x: -sin, y: cos };
+  // 水平なら「下」（+y）、垂直なら「右」（+x）に近いほうを選ぶ
+  const wanted = Math.abs(cos) >= Math.abs(sin) ? { x: 0, y: 1 } : { x: 1, y: 0 };
+  const alignment = toBottom.x * wanted.x + toBottom.y * wanted.y;
+
+  return alignment >= 0 ? 'roiBottom' : 'roiTop';
+}
+
+/**
  * バンドの色名ラベルを置く位置（元画像座標）。
  *
  * バンド中心から短軸の外側（法線方向）へ `offset` px ずらす。
  * 抵抗器の上に文字が重なって色帯が見えなくなるのを避けるため。
  *
  * @param offset 箱の縁からの距離 [px]（元画像スケール）
+ * @param side どちらの縁から出すか（{@link labelSide} で決める）
  */
 export function labelAnchor(
   box: OrientedBox,
   options: RectifyOptions,
   band: ColumnRange,
   offset: number,
+  side: LabelSide = 'roiTop',
 ): Point {
   const geometry = roiGeometry(box, options);
   const centerColumn = (band.start + band.end) / 2;
+  const toBottom = side === 'roiBottom';
 
-  // 箱の上辺（ROI の y=0 側）に乗せてから、法線方向へさらに離す
-  const onEdge = roiToImage(box, options, centerColumn, 0);
-  return {
-    x: onEdge.x + offset * geometry.sin,
-    y: onEdge.y - offset * geometry.cos,
-  };
+  const onEdge = roiToImage(box, options, centerColumn, toBottom ? geometry.height : 0);
+  const direction = toBottom
+    ? { x: -geometry.sin, y: geometry.cos }
+    : { x: geometry.sin, y: -geometry.cos };
+
+  return { x: onEdge.x + offset * direction.x, y: onEdge.y + offset * direction.y };
 }
