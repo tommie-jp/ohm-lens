@@ -1,6 +1,8 @@
 import type { Band, LabColor, ProfileSample, ResistorReading } from '../types.js';
 import { extractProfile, type ProfileOptions, type RoiImage } from './bands/profile.js';
-import { bandRuns, segmentBands, type SegmentOptions } from './bands/segment.js';
+import { bandRuns, toBands, type SegmentOptions } from './bands/segment.js';
+import { recoverToleranceRun } from './bands/recover.js';
+import { DEFAULT_PALETTE } from './color/palette.js';
 import type { ColorRun } from './bands/runs.js';
 import { bodyExtent, type BodyExtent, type BodyExtentOptions } from './bands/extent.js';
 import { normalizeLightness, type NormalizeOptions } from './bands/normalize.js';
@@ -111,8 +113,10 @@ export function analyzeRoi(image: RoiImage, options: AnalyzeOptions = {}): Analy
   const analysed = extent === null ? profile : profile.slice(extent.start, extent.end);
 
   const segmentOptions = options.segment ?? {};
-  const runs = bandRuns(analysed, segmentOptions);
-  const bands = segmentBands(analysed, segmentOptions);
+  // 3 本しか出なかったときは、許容差バンドを位置を絞って拾い直す。
+  // bands は runs から作る（別々に分割すると本数がずれる）
+  const runs = recoverToleranceRun(analysed, bandRuns(analysed, segmentOptions));
+  const bands = toBands(runs, segmentOptions.palette ?? DEFAULT_PALETTE);
   const roiLength = extent === null ? image.width : extent.end - extent.start;
 
   // 同時デコード（色候補 × カラーコード表 × E系列で全体最適）を優先し、

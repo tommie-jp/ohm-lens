@@ -146,7 +146,17 @@ export function segmentBands(
   profile: readonly ProfileSample[],
   options: SegmentOptions = {},
 ): Band[] {
-  return bandRuns(profile, options).map((run) => toBand(run, options.palette ?? DEFAULT_PALETTE));
+  return toBands(bandRuns(profile, options), options.palette ?? DEFAULT_PALETTE);
+}
+
+/**
+ * ランの列をバンドに分類する。
+ *
+ * `segmentBands` と分けてあるのは、拾い直し（`recoverToleranceRun`）を通した
+ * あとのランから作る必要があるため。分割を 2 度走らせると本数がずれる。
+ */
+export function toBands(runs: readonly ColorRun[], palette: Palette): Band[] {
+  return runs.map((run) => toBand(run, palette));
 }
 
 function toBand(run: ColorRun, palette: Palette): Band {
