@@ -1,13 +1,10 @@
 import sharp from 'sharp';
-import { analyzeRoi } from '../core/pipeline.js';
-import { locateResistor } from '../core/locate.js';
-import { rectify } from '../core/rectify.js';
-import { refineBoxExtent } from '../core/refine.js';
-import { analyzeOptions, refineOptions, ROI_OPTIONS } from '../core/settings.js';
-import { formatConfidence, formatOhms, isReportable } from '../core/format.js';
-import { jointReadResistor } from '../core/value/jointDecode.js';
+import type { AnalysisResult } from '../core/pipeline.js';
+import type { OrientedBox } from '../core/locate.js';
+import { ROI_OPTIONS } from '../core/settings.js';
 import { DEFAULT_PALETTE, type Palette } from '../core/color/palette.js';
 import type { RoiImage } from '../core/bands/profile.js';
+import { captionFor, readResistorImage } from './read.js';
 import {
   buildAnnotationSvg,
   labelOverflow,
@@ -79,25 +76,26 @@ export async function annotateImage(
 ): Promise<AnnotateResult> {
   const palette = options.palette ?? DEFAULT_PALETTE;
   const image = await loadRoiImage(path);
-  const located = locateResistor(image);
+  const read = readResistorImage(image, {
+    palette,
+    ...(options.expectedOhms === undefined ? {} : { expectedOhms: options.expectedOhms }),
+  });
+  const caption = captionFor(read, label, options.expectedOhms);
 
-  const expected =
-    options.expectedOhms === undefined ? '期待 不明' : `期待 ${formatOhms(options.expectedOhms)}`;
-
-  if (located === null) {
+  if (!read.located) {
     const input: AnnotateInput = {
       width: canvasWidth(image, 0),
       height: image.height,
       box: null,
       bands: [],
       rectify: ROI_OPTIONS,
-      caption: `${label} | ${expected} | 検出失敗`,
+      caption,
       colorSpace: { palette, observed: [] },
       ...(options.japanese === undefined ? {} : { japanese: options.japanese }),
     };
     return {
       jpeg: await composite(image, input),
-      caption: `${label} | ${expected} | 検出失敗`,
+      caption,
       located: false,
       ohms: null,
       correct: false,
@@ -105,32 +103,9 @@ export async function annotateImage(
     };
   }
 
-  // カラーコードの並びを手がかりに、枠を長軸方向へ広げ直す
-  const box = refineBoxExtent(located, image, refineOptions(palette));
-  const roi = rectify(image, box, ROI_OPTIONS);
-  const result = analyzeRoi(roi, analyzeOptions(box, palette));
-  // 役割つきの解釈が要るので、同じランで joint デコードを取り直す
-  const joint = jointReadResistor(
-    result.runs.map((run) => ({ lab: run.lab, start: run.start, end: run.end })),
-    { palette },
-  );
-
-  const ohms = result.reading?.ohms ?? null;
-  const confident = isReportable(result.reading ?? null);
-  const correct =
-    options.expectedOhms !== undefined &&
-    ohms !== null &&
-    Math.abs(ohms - options.expectedOhms) / options.expectedOhms < 1e-6;
-
-  const bandSummary = (joint?.usedRuns ?? [])
-    .map((used) => `${used.color}${used.roleText}`)
-    .join(' ');
-  const caption =
-    `${label} | ${expected} → ` +
-    `${ohms === null ? '読取不可' : `${formatOhms(ohms)}${confident ? '' : '(保留)'}`} ` +
-    `[確信度 ${formatConfidence(result.reading?.confidence ?? 0)}] | ` +
-    `${box.angleDeg.toFixed(0)}° L${Math.round(box.length)} T${Math.round(box.thickness)} ` +
-    `(比 ${(box.length / box.thickness).toFixed(2)}) | ${bandSummary}`;
+  const box = read.box as OrientedBox;
+  const result = read.analysis as AnalysisResult;
+  const joint = read.joint;
 
   const colorSpace = { palette, observed: result.runs.map((run) => run.lab) };
   const base: AnnotateInput = {
@@ -153,9 +128,9 @@ export async function annotateImage(
     jpeg: await composite(image, input),
     caption,
     located: true,
-    ohms,
-    correct,
-    confident,
+    ohms: read.ohms,
+    correct: read.correct,
+    confident: read.confident,
   };
 }
 
