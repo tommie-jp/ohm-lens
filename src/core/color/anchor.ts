@@ -41,13 +41,25 @@ export function estimateBodyAnchor(profile: readonly ProfileSample[]): LabColor 
   };
 }
 
-/** 観測アンカーに最も近い本体色の基準 Lab を選ぶ。 */
+/**
+ * 観測アンカーに最も近い本体色の基準 Lab を選ぶ。
+ *
+ * **色み（a\*b\*）だけで比べ、明度は見ない。** 観測アンカーの明度は露出で
+ * いくらでも動く。39 枚の実測では基準への倍率が 1.10〜3.75 倍に散らばり、
+ * しかも**全枚数で 1 より大きい**（撮影されたボディは基準より必ず暗い）。
+ * 明度を判断に混ぜると、比較しているのは色ではなく露出になる。
+ *
+ * 実害が出ていた。`39-10Mohm`（青メタルフィルム、アンカー L20 a-7 b-5）は
+ * lightblue との明度差 59 が効いて **beige** に写され、b\* に +29 が加算されて
+ * いた。黒バンドが L20 a12 **b30** と読まれて茶に倒れていたのはこれが原因。
+ */
 export function nearestBodyReference(anchor: LabColor): LabColor {
-  const prepared = prepareLab(anchor);
-
+  // 明度を基準側にそろえてから比べる。ΔE2000 の色相・彩度の重み付けは
+  // 使いたいので、指標そのものは変えない
   let best = (BODY_ENTRIES[0] as (typeof BODY_ENTRIES)[number]).lab;
   let bestDelta = Number.POSITIVE_INFINITY;
   for (const entry of BODY_ENTRIES) {
+    const prepared = prepareLab({ l: entry.lab.l, a: anchor.a, b: anchor.b });
     const delta = deltaE2000Prepared(prepared, entry.prepared);
     if (delta < bestDelta) {
       bestDelta = delta;
