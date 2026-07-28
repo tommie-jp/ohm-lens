@@ -1,4 +1,4 @@
-import type { Band } from '../types.js';
+import type { Band, ProfileSample } from '../types.js';
 import type { OrientedBox } from '../core/locate.js';
 import type { RectifyOptions } from '../core/rectify.js';
 import { bandCorners, labelAnchor, labelSide } from '../core/roiMapping.js';
@@ -57,6 +57,27 @@ const TABLE = {
 /** 表の行数（番号・色名・色玉・意味）。 */
 const TABLE_ROWS = 4;
 
+/**
+ * 中心線プロファイルのグラフの寸法。
+ *
+ * ラン分割が実際に食べている値（色順応補正後の L*a*b*）をそのまま描く。
+ * 「なぜこの本数になったか」を目で追うためのもの。
+ */
+const CHART = {
+  height: 150,
+  /** 目盛りラベルのぶん左に空ける */
+  axisWidth: 34,
+  padding: 10,
+  fontPx: 11,
+} as const;
+
+/** L* / a* / b* の線の色。a* は赤緑軸、b* は青黄軸なのでそれに寄せる。 */
+const CHART_SERIES = [
+  { key: 'l' as const, label: 'L*', color: '#444444' },
+  { key: 'a' as const, label: 'a*', color: '#d0021b' },
+  { key: 'b' as const, label: 'b*', color: '#1f6fb2' },
+];
+
 /** バンド一覧表の高さ [px]。バンドが無ければ 0。 */
 export function tableHeightFor(bandCount: number): number {
   if (bandCount === 0) return 0;
@@ -66,6 +87,16 @@ export function tableHeightFor(bandCount: number): number {
 /** バンド一覧表の幅 [px]。 */
 function tableWidthFor(bandCount: number): number {
   return TABLE.columnWidth * bandCount + TABLE.padding * 2;
+}
+
+/**
+ * 表とグラフを並べた帯の高さ [px]。
+ * グラフは表の右に置くので、高い方に合わせる。
+ */
+export function blockHeightFor(input: Pick<AnnotateInput, 'bands' | 'profile'>): number {
+  const table = tableHeightFor(input.bands.length);
+  const chart = input.profile === undefined || input.profile.samples.length === 0 ? 0 : CHART.height;
+  return Math.max(table, chart);
 }
 
 export interface AnnotateInput {
@@ -89,6 +120,17 @@ export interface AnnotateInput {
     readonly palette: Palette;
     /** 検出したバンドの実測色 */
     readonly observed: readonly LabColor[];
+  };
+  /**
+   * 中心線の 1D プロファイル（色順応補正後）。ラン分割が実際に食べている値。
+   * 省略するとグラフを描かない。
+   */
+  readonly profile?: {
+    readonly samples: readonly ProfileSample[];
+    /** 本体と判定された範囲。特定できなければ null */
+    readonly extent: { readonly start: number; readonly end: number } | null;
+    /** バンド候補のランの境界（縦線で重ねる） */
+    readonly runs: readonly { readonly start: number; readonly end: number }[];
   };
   /** 注釈のために写真の外へ広げた量（{@link labelOverflow} の結果） */
   readonly labelOverflow?: LabelOverflow;
@@ -248,6 +290,110 @@ function buildBandTableSvg(
   return parts.join('');
 }
 
+/**
+ * 中心線プロファイルのグラフを描く。L* / a* / b* を 1 枚に重ねる。
+ *
+ * X 軸は抵抗器の長さ方向（ROI の列）。Y 軸は 3 系列の値域をまとめて取る。
+ * ラン境界を縦線で、本体範囲の外を灰色で塗るので、**なぜこの本数になったか**
+ * を目で追える。値は色順応補正の後なので、L* が 100 を超えることがある。
+ */
+function buildProfileChartSvg(input: AnnotateInput, left: number, top: number): string {
+  const chart = input.profile;
+  if (chart === undefined || chart.samples.length === 0) return '';
+
+  const width = Math.max(0, input.width - left - CHART.padding);
+  if (width < 80) return '';
+
+  const plotLeft = left + CHART.axisWidth;
+  const plotWidth = width - CHART.axisWidth;
+  const plotTop = top + CHART.padding;
+  const plotHeight = CHART.height - CHART.padding * 2 - CHART.fontPx;
+
+  const values = chart.samples.flatMap((s) => [s.lab.l, s.lab.a, s.lab.b]);
+  const rawMin = Math.min(...values);
+  const rawMax = Math.max(...values);
+  const pad = Math.max(5, (rawMax - rawMin) * 0.06);
+  const min = rawMin - pad;
+  const max = rawMax + pad;
+  const span = Math.max(1, max - min);
+
+  const count = chart.samples.length;
+  const toX = (index: number): number =>
+    plotLeft + (count <= 1 ? 0 : (index / (count - 1)) * plotWidth);
+  const toY = (value: number): number => plotTop + ((max - value) / span) * plotHeight;
+
+  const parts: string[] = [
+    `<rect x="${left.toFixed(1)}" y="${top.toFixed(1)}" width="${width.toFixed(1)}" ` +
+      `height="${CHART.height}" fill="#ffffff" stroke="rgba(0,0,0,0.25)" stroke-width="1" />`,
+  ];
+
+  // 本体範囲の外は薄く塗る（ここのランはバンドにしない）
+  if (chart.extent !== null) {
+    const shade = (from: number, to: number): void => {
+      if (to <= from) return;
+      parts.push(
+        `<rect x="${toX(from).toFixed(1)}" y="${plotTop.toFixed(1)}" ` +
+          `width="${(toX(to) - toX(from)).toFixed(1)}" height="${plotHeight.toFixed(1)}" ` +
+          `fill="rgba(0,0,0,0.06)" />`,
+      );
+    };
+    shade(0, chart.extent.start);
+    shade(chart.extent.end, count - 1);
+  }
+
+  // 0 の水平線（a*/b* の符号が読めるように）
+  if (min < 0 && max > 0) {
+    parts.push(
+      `<line x1="${plotLeft.toFixed(1)}" y1="${toY(0).toFixed(1)}" ` +
+        `x2="${(plotLeft + plotWidth).toFixed(1)}" y2="${toY(0).toFixed(1)}" ` +
+        `stroke="rgba(0,0,0,0.25)" stroke-width="1" stroke-dasharray="3 3" />`,
+    );
+  }
+
+  // ラン境界（本数判定の理由が見えるように）
+  for (const run of chart.runs) {
+    for (const edge of [run.start, run.end]) {
+      parts.push(
+        `<line x1="${toX(edge).toFixed(1)}" y1="${plotTop.toFixed(1)}" ` +
+          `x2="${toX(edge).toFixed(1)}" y2="${(plotTop + plotHeight).toFixed(1)}" ` +
+          `stroke="rgba(255,59,48,0.55)" stroke-width="1" />`,
+      );
+    }
+  }
+
+  // 3 系列
+  for (const series of CHART_SERIES) {
+    const points = chart.samples
+      .map((sample, index) => `${toX(index).toFixed(1)},${toY(sample.lab[series.key]).toFixed(1)}`)
+      .join(' ');
+    parts.push(
+      `<polyline points="${points}" fill="none" stroke="${series.color}" ` +
+        `stroke-width="1.5" stroke-linejoin="round" />`,
+    );
+  }
+
+  // 目盛り（上端・下端・0）と凡例
+  const tick = (value: number): string =>
+    `<text x="${(plotLeft - 4).toFixed(1)}" y="${toY(value).toFixed(1)}" ` +
+    `font-family="sans-serif" font-size="${CHART.fontPx}" fill="#666" ` +
+    `text-anchor="end" dominant-baseline="central">${Math.round(value)}</text>`;
+  parts.push(tick(rawMax), tick(rawMin));
+  if (min < 0 && max > 0) parts.push(tick(0));
+
+  const legendY = plotTop + plotHeight + CHART.fontPx + 2;
+  CHART_SERIES.forEach((series, index) => {
+    const x = plotLeft + index * 46;
+    parts.push(
+      `<line x1="${x}" y1="${legendY.toFixed(1)}" x2="${x + 16}" y2="${legendY.toFixed(1)}" ` +
+        `stroke="${series.color}" stroke-width="2" />`,
+      `<text x="${x + 20}" y="${legendY.toFixed(1)}" font-family="sans-serif" ` +
+        `font-size="${CHART.fontPx}" fill="#333" dominant-baseline="central">${series.label}</text>`,
+    );
+  });
+
+  return parts.join('');
+}
+
 /** 焼き込み用の SVG を返す。 */
 export function buildAnnotationSvg(input: AnnotateInput): string {
   const japanese = input.japanese ?? true;
@@ -299,8 +445,12 @@ export function buildAnnotationSvg(input: AnnotateInput): string {
 
   const tableTop = input.height + (input.labelOverflow?.bottom ?? 0);
   parts.push(buildBandTableSvg(input, nameOf, tableTop));
+  // グラフは表の右。X 軸が抵抗器の長さ方向なので、表の番号と並びが対応する
+  parts.push(
+    buildProfileChartSvg(input, tableWidthFor(input.bands.length) + CHART.padding, tableTop),
+  );
 
-  const panelTop = tableTop + tableHeightFor(input.bands.length);
+  const panelTop = tableTop + blockHeightFor(input);
   const panelHeight = panelHeightFor(input, input.width);
   if (input.colorSpace !== undefined) {
     parts.push(

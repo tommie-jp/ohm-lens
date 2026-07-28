@@ -9,7 +9,7 @@ import {
   buildAnnotationSvg,
   labelOverflow,
   panelHeightFor,
-  tableHeightFor,
+  blockHeightFor,
   panelWidthFor,
   type AnnotateInput,
 } from './render.js';
@@ -118,6 +118,12 @@ export async function annotateImage(
     caption,
     // 実測色は分類前のランの Lab（基準色にどう引き寄せられたかを見るため）
     colorSpace,
+    // 中心線プロファイル。ラン分割が食べている値そのものを描く
+    profile: {
+      samples: result.profile,
+      extent: result.extent,
+      runs: result.runs.map((run) => ({ start: run.start, end: run.end })),
+    },
     ...(joint === null ? {} : { usedRuns: joint.usedRuns, droppedRuns: joint.droppedRuns }),
     ...(options.japanese === undefined ? {} : { japanese: options.japanese }),
   };
@@ -147,9 +153,8 @@ async function composite(image: RoiImage, input: AnnotateInput): Promise<Buffer>
   });
 
   const overflow = input.labelOverflow ?? { right: 0, bottom: 0 };
-  // 下に伸ばす分 = 注釈のはみ出し + バンド一覧表 + 色空間パネル
-  const bottom =
-    overflow.bottom + tableHeightFor(input.bands.length) + panelHeightFor(input, input.width);
+  // 下に伸ばす分 = 注釈のはみ出し + 一覧表とグラフの帯 + 色空間パネル
+  const bottom = overflow.bottom + blockHeightFor(input) + panelHeightFor(input, input.width);
   const right = Math.max(input.width - image.width, overflow.right);
   if (bottom === 0 && right <= 0) {
     return base

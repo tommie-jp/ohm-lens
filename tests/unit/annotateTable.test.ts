@@ -1,5 +1,10 @@
 import { describe, expect, it } from 'vitest';
-import { buildAnnotationSvg, tableHeightFor, type AnnotateInput } from '../../src/annotate/render.js';
+import {
+  blockHeightFor,
+  buildAnnotationSvg,
+  tableHeightFor,
+  type AnnotateInput,
+} from '../../src/annotate/render.js';
 import type { Band } from '../../src/types.js';
 import type { OrientedBox } from '../../src/core/locate.js';
 
@@ -112,5 +117,64 @@ describe('バンド一覧表', () => {
 
     expect(svg).not.toContain('>除外<');
     expect(tableHeightFor(0)).toBe(0);
+  });
+});
+
+describe('中心線プロファイルのグラフ', () => {
+  const profileOf = (length: number): NonNullable<AnnotateInput['profile']> => ({
+    samples: Array.from({ length }, (_, x) => ({
+      x,
+      lab: { l: 50 + (x % 7), a: x % 3, b: -5 + (x % 5) },
+    })),
+    extent: { start: 2, end: length - 2 },
+    runs: [
+      { start: 3, end: 6 },
+      { start: 10, end: 13 },
+    ],
+  });
+
+  it('プロファイルが無ければ帯の高さは表だけで決まる', () => {
+    // Arrange / Act / Assert
+    expect(blockHeightFor({ bands: bandsOf(['red', 'red', 'brown']) })).toBe(tableHeightFor(3));
+  });
+
+  it('プロファイルがあれば帯は表より高くなる（グラフを右に並べる）', () => {
+    const height = blockHeightFor({
+      bands: bandsOf(['red', 'red', 'brown']),
+      profile: profileOf(40),
+    });
+
+    expect(height).toBeGreaterThan(tableHeightFor(3));
+  });
+
+  it('L* / a* / b* の 3 本を折れ線で描く', () => {
+    // Arrange
+    const input = inputOf({ width: 800, profile: profileOf(40) });
+
+    // Act
+    const svg = buildAnnotationSvg(input);
+
+    // Assert
+    expect(svg.split('<polyline').length - 1).toBe(3);
+    expect(svg).toContain('>L*<');
+    expect(svg).toContain('>a*<');
+    expect(svg).toContain('>b*<');
+  });
+
+  it('プロファイルが空ならグラフを描かない', () => {
+    const svg = buildAnnotationSvg(
+      inputOf({ width: 800, profile: { samples: [], extent: null, runs: [] } }),
+    );
+
+    expect(svg).not.toContain('<polyline');
+  });
+
+  it('幅が足りなければグラフを省く（表とパネルを壊さない）', () => {
+    // Arrange: 表だけで埋まる細いキャンバス
+    const svg = buildAnnotationSvg(inputOf({ width: 200, profile: profileOf(40) }));
+
+    // Assert
+    expect(svg).not.toContain('<polyline');
+    expect(svg).toContain('>茶<');
   });
 });
