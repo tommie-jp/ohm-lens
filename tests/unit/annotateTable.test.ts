@@ -156,9 +156,9 @@ describe('中心線プロファイルのグラフ', () => {
 
     // Assert
     expect(svg.split('<polyline').length - 1).toBe(3);
-    expect(svg).toContain('>L*<');
-    expect(svg).toContain('>a*<');
-    expect(svg).toContain('>b*<');
+    expect(svg).toContain('>L*(左)<');
+    expect(svg).toContain('>a*(右)<');
+    expect(svg).toContain('>b*(右)<');
   });
 
   it('プロファイルが空ならグラフを描かない', () => {
@@ -204,5 +204,49 @@ describe('中心線プロファイルのグラフ', () => {
 
     // Assert: 薄い番号（opacity 0.45）が描かれている
     expect(svg).toContain('opacity="0.45"');
+  });
+
+  it('L* と a*/b* でスケールを分け、目盛りを左右に出す', () => {
+    // Arrange: L* は 50 前後、a*/b* は 0 付近と値域がまるで違う
+    const input = inputOf({ width: 800, profile: profileOf(40) });
+
+    // Act
+    const svg = buildAnnotationSvg(input);
+
+    // Assert: 左寄せ（右端揃え）と右寄せ（左端揃え）の目盛りが両方ある
+    expect(svg).toContain('text-anchor="end"');
+    expect(svg).toContain('text-anchor="start"');
+    expect(svg).toContain('>L*(左)<');
+    expect(svg).toContain('>a*(右)<');
+    expect(svg).toContain('>b*(右)<');
+  });
+
+  it('L* と a*/b* がそれぞれプロットの上下 80% を使う', () => {
+    // Arrange: L* は 40..69、a*/b* は -2..4 と桁違いの幅。
+    // a* と b* は 1 つのスケールを共有するので、埋めるのは 2 本合わせて
+    const samples = Array.from({ length: 30 }, (_, x) => ({
+      x,
+      lab: { l: 40 + x, a: -2 + (x % 7) * 0.5, b: 4 - (x % 5) * 0.5 },
+    }));
+    const svg = buildAnnotationSvg(
+      inputOf({ width: 800, profile: { samples, extent: null, runs: [] } }),
+    );
+
+    // Act
+    const ysOf = (index: number): number[] => {
+      const all = [...svg.matchAll(/<polyline points="([^"]+)"/g)];
+      return ((all[index] as RegExpMatchArray)[1] as string)
+        .split(' ')
+        .map((point) => Number(point.split(',')[1]));
+    };
+    const lightnessYs = ysOf(0);
+    const chromaYs = [...ysOf(1), ...ysOf(2)];
+    const spanOf = (ys: readonly number[]): number => Math.max(...ys) - Math.min(...ys);
+
+    // Assert: どちらも同じ高さ（プロット高の 80%）を使う
+    expect(spanOf(chromaYs)).toBeCloseTo(spanOf(lightnessYs), 1);
+    // 最大値が 10%、最小値が 90% の位置なので、使う高さは 80%
+    const plotHeight = 150 - 10 * 2 - 11;
+    expect(spanOf(lightnessYs)).toBeCloseTo(plotHeight * 0.8, 1);
   });
 });

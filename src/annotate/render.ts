@@ -65,10 +65,16 @@ const TABLE_ROWS = 4;
  */
 const CHART = {
   height: 150,
-  /** 目盛りラベルのぶん左に空ける */
+  /** 目盛りラベルのぶん左右に空ける（左が L*、右が a* と b*） */
   axisWidth: 34,
   padding: 10,
   fontPx: 11,
+  /**
+   * 値域をプロット高のどこに収めるか。
+   * 最大値を高さの 90%、最小値を 10% の位置に置き、上下に余白を残す。
+   */
+  topFraction: 0.1,
+  bottomFraction: 0.9,
 } as const;
 
 /** L* / a* / b* の線の色。a* は赤緑軸、b* は青黄軸なのでそれに寄せる。 */
@@ -305,22 +311,34 @@ function buildProfileChartSvg(input: AnnotateInput, left: number, top: number): 
   if (width < 80) return '';
 
   const plotLeft = left + CHART.axisWidth;
-  const plotWidth = width - CHART.axisWidth;
+  const plotWidth = width - CHART.axisWidth * 2;
   const plotTop = top + CHART.padding;
   const plotHeight = CHART.height - CHART.padding * 2 - CHART.fontPx;
 
-  const values = chart.samples.flatMap((s) => [s.lab.l, s.lab.a, s.lab.b]);
-  const rawMin = Math.min(...values);
-  const rawMax = Math.max(...values);
-  const pad = Math.max(5, (rawMax - rawMin) * 0.06);
-  const min = rawMin - pad;
-  const max = rawMax + pad;
-  const span = Math.max(1, max - min);
+  // L* と a*/b* は値域が違う（L* は 0〜100 超、a*/b* は概ね -60〜80）。
+  // 同じ軸に乗せると L* の変化ばかりが目立つので、系列ごとにスケールを分ける。
+  const lightness = chart.samples.map((sample) => sample.lab.l);
+  const chroma = chart.samples.flatMap((sample) => [sample.lab.a, sample.lab.b]);
+
+  /** 最大値をプロット高の 90%、最小値を 10% の位置に写す。 */
+  const scaleOf = (values: readonly number[]): ((value: number) => number) => {
+    const min = Math.min(...values);
+    const max = Math.max(...values);
+    const span = Math.max(1e-6, max - min);
+    return (value: number): number =>
+      plotTop +
+      (CHART.topFraction +
+        (CHART.bottomFraction - CHART.topFraction) * ((max - value) / span)) *
+        plotHeight;
+  };
+  const toLy = scaleOf(lightness);
+  const toCy = scaleOf(chroma);
+  const yOf = (key: 'l' | 'a' | 'b', value: number): number =>
+    key === 'l' ? toLy(value) : toCy(value);
 
   const count = chart.samples.length;
   const toX = (index: number): number =>
     plotLeft + (count <= 1 ? 0 : (index / (count - 1)) * plotWidth);
-  const toY = (value: number): number => plotTop + ((max - value) / span) * plotHeight;
 
   const parts: string[] = [
     `<rect x="${left.toFixed(1)}" y="${top.toFixed(1)}" width="${width.toFixed(1)}" ` +
@@ -341,11 +359,13 @@ function buildProfileChartSvg(input: AnnotateInput, left: number, top: number): 
     shade(chart.extent.end, count - 1);
   }
 
-  // 0 の水平線（a*/b* の符号が読めるように）
-  if (min < 0 && max > 0) {
+  // 0 の水平線（a*/b* の符号が読めるように。L* ではなく彩度側のスケール）
+  const chromaMin = Math.min(...chroma);
+  const chromaMax = Math.max(...chroma);
+  if (chromaMin < 0 && chromaMax > 0) {
     parts.push(
-      `<line x1="${plotLeft.toFixed(1)}" y1="${toY(0).toFixed(1)}" ` +
-        `x2="${(plotLeft + plotWidth).toFixed(1)}" y2="${toY(0).toFixed(1)}" ` +
+      `<line x1="${plotLeft.toFixed(1)}" y1="${toCy(0).toFixed(1)}" ` +
+        `x2="${(plotLeft + plotWidth).toFixed(1)}" y2="${toCy(0).toFixed(1)}" ` +
         `stroke="rgba(0,0,0,0.25)" stroke-width="1" stroke-dasharray="3 3" />`,
     );
   }
@@ -366,7 +386,10 @@ function buildProfileChartSvg(input: AnnotateInput, left: number, top: number): 
   // 3 系列
   for (const series of CHART_SERIES) {
     const points = chart.samples
-      .map((sample, index) => `${toX(index).toFixed(1)},${toY(sample.lab[series.key]).toFixed(1)}`)
+      .map(
+        (sample, index) =>
+          `${toX(index).toFixed(1)},${yOf(series.key, sample.lab[series.key]).toFixed(1)}`,
+      )
       .join(' ');
     parts.push(
       `<polyline points="${points}" fill="none" stroke="${series.color}" ` +
@@ -390,22 +413,44 @@ function buildProfileChartSvg(input: AnnotateInput, left: number, top: number): 
     );
   });
 
-  // 目盛り（上端・下端・0）と凡例
-  const tick = (value: number): string =>
-    `<text x="${(plotLeft - 4).toFixed(1)}" y="${toY(value).toFixed(1)}" ` +
-    `font-family="sans-serif" font-size="${CHART.fontPx}" fill="#666" ` +
-    `text-anchor="end" dominant-baseline="central">${Math.round(value)}</text>`;
-  parts.push(tick(rawMax), tick(rawMin));
-  if (min < 0 && max > 0) parts.push(tick(0));
+  // 目盛り: 左が L*、右が a*/b*。線の色に合わせて対応が分かるようにする
+  const tick = (
+    value: number,
+    y: number,
+    x: number,
+    anchor: 'start' | 'end',
+    fill: string,
+  ): string =>
+    `<text x="${x.toFixed(1)}" y="${y.toFixed(1)}" font-family="sans-serif" ` +
+    `font-size="${CHART.fontPx}" fill="${fill}" text-anchor="${anchor}" ` +
+    `dominant-baseline="central">${Math.round(value)}</text>`;
+
+  const leftX = plotLeft - 4;
+  const rightX = plotLeft + plotWidth + 4;
+  const lMin = Math.min(...lightness);
+  const lMax = Math.max(...lightness);
+  const lColor = (CHART_SERIES[0] as (typeof CHART_SERIES)[number]).color;
+  parts.push(
+    tick(lMax, toLy(lMax), leftX, 'end', lColor),
+    tick(lMin, toLy(lMin), leftX, 'end', lColor),
+    tick(chromaMax, toCy(chromaMax), rightX, 'start', '#666'),
+    tick(chromaMin, toCy(chromaMin), rightX, 'start', '#666'),
+  );
+  if (chromaMin < 0 && chromaMax > 0) parts.push(tick(0, toCy(0), rightX, 'start', '#666'));
+
 
   const legendY = plotTop + plotHeight + CHART.fontPx + 2;
+  const legendStep = Math.min(72, Math.max(52, plotWidth / CHART_SERIES.length));
   CHART_SERIES.forEach((series, index) => {
-    const x = plotLeft + index * 46;
+    const x = plotLeft + index * legendStep;
+    // 左軸か右軸かを凡例に書く。上端に置くと目盛りと重なるため
+    const axis = series.key === 'l' ? '左' : '右';
     parts.push(
-      `<line x1="${x}" y1="${legendY.toFixed(1)}" x2="${x + 16}" y2="${legendY.toFixed(1)}" ` +
-        `stroke="${series.color}" stroke-width="2" />`,
-      `<text x="${x + 20}" y="${legendY.toFixed(1)}" font-family="sans-serif" ` +
-        `font-size="${CHART.fontPx}" fill="#333" dominant-baseline="central">${series.label}</text>`,
+      `<line x1="${x.toFixed(1)}" y1="${legendY.toFixed(1)}" x2="${(x + 14).toFixed(1)}" ` +
+        `y2="${legendY.toFixed(1)}" stroke="${series.color}" stroke-width="2" />`,
+      `<text x="${(x + 18).toFixed(1)}" y="${legendY.toFixed(1)}" font-family="sans-serif" ` +
+        `font-size="${CHART.fontPx}" fill="#333" dominant-baseline="central">` +
+        `${series.label}(${axis})</text>`,
     );
   });
 
