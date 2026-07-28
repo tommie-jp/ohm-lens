@@ -252,3 +252,75 @@ describe('許容差バンドの間隔による方向の加点', () => {
     expect(reading?.direction).toBe('ltr');
   });
 });
+
+/**
+ * バンド間隔の不揃いによる確信度の減点。
+ *
+ * IEC 60062 は数字・倍率バンドを等間隔に印刷する。間隔が極端に不揃いなら、
+ * ランの取りこぼしか過分割が起きている疑いが濃い。実測（39 枚）では
+ * 間隔の変動係数が 0.55 を超える読みは 4 枚あり**すべて誤読**で、
+ * 正解の最大は 0.50 だった。
+ */
+describe('間隔の不揃いによる確信度の減点', () => {
+  /** 指定した間隔でランを並べる。 */
+  function runsWithGaps(colors: readonly BandColor[], gaps: readonly number[]): JointRun[] {
+    const width = 8;
+    let x = 0;
+    return colors.map((color, index) => {
+      if (index > 0) x += width + (gaps[index - 1] as number);
+      return { lab: labOf(color), start: x, end: x + width };
+    });
+  }
+
+  it('間隔が不揃いなら確信度が下がる', () => {
+    // Arrange: 同じ色・同じ本数で、間隔だけを変えた 2 通り
+    const colors: BandColor[] = ['yellow', 'violet', 'red', 'gold'];
+    const even = runsWithGaps(colors, [4, 4, 10]);
+    const uneven = runsWithGaps(colors, [1, 20, 3]);
+
+    // Act
+    const evenReading = jointReadResistor(even);
+    const unevenReading = jointReadResistor(uneven);
+
+    // Assert: 値は同じでも、不揃いな方は自信を持てない
+    expect(evenReading?.ohms).toBeCloseTo(4700, 6);
+    expect(unevenReading?.ohms).toBeCloseTo(4700, 6);
+    expect(unevenReading?.confidence).toBeLessThan(evenReading?.confidence ?? 0);
+  });
+
+  it('許容差バンドが離れているだけでは減点しない', () => {
+    // Arrange: 数字・倍率は等間隔で、許容差の手前だけ広い（IEC 60062 の標準）。
+    //          実測では正解の許容差間隔は芯の間隔の 2.44 倍までに収まる
+    const colors: BandColor[] = ['yellow', 'violet', 'red', 'gold'];
+    const standard = runsWithGaps(colors, [4, 4, 10]);
+    const tight = runsWithGaps(colors, [4, 4, 4]);
+
+    // Act / Assert
+    expect(jointReadResistor(standard)?.confidence).toBeCloseTo(
+      jointReadResistor(tight)?.confidence ?? 0,
+      2,
+    );
+  });
+
+  it('3 バンドには効かせない（許容差バンドが無く、間隔が 2 つしか無い）', () => {
+    const colors: BandColor[] = ['yellow', 'violet', 'red'];
+
+    const even = jointReadResistor(runsWithGaps(colors, [4, 4]));
+    const uneven = jointReadResistor(runsWithGaps(colors, [1, 20]));
+
+    expect(uneven?.confidence).toBeCloseTo(even?.confidence ?? 0, 2);
+  });
+
+  it('許容差バンドだけが極端に離れていれば減点する', () => {
+    // Arrange: 芯の間隔 4 に対し許容差の手前が 32（8 倍）。実測の 15-339ohm と
+    //          同じ形で、あいだのバンドを取りこぼしたときにこうなる
+    const colors: BandColor[] = ['yellow', 'violet', 'red', 'gold'];
+    const normal = runsWithGaps(colors, [4, 4, 8]);
+    const stretched = runsWithGaps(colors, [4, 4, 32]);
+
+    // Act / Assert
+    expect(jointReadResistor(stretched)?.confidence).toBeLessThan(
+      jointReadResistor(normal)?.confidence ?? 0,
+    );
+  });
+});

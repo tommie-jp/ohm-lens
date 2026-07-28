@@ -169,6 +169,37 @@ const CONFIDENCE_MARGIN_SCALE = 4;
  */
 const SPACING_COST_SCALE = 1.5;
 
+/**
+ * バンドの並びの幾何が壊れているときの確信度の倍率。
+ *
+ * IEC 60062 は数字・倍率バンドを**等間隔**に印刷し、許容差バンドだけを
+ * 離す。並びがこの形から外れているなら、ランの取りこぼしか過分割が
+ * 起きている疑いが濃い。色がどれだけ基準色に近くても、見ているものが
+ * バンドでなければ意味がない。
+ *
+ * `spacingCost` が「どちら向きに読むか」の根拠に間隔を使うのに対し、
+ * こちらは**読みの当否そのもの**を疑う。コストではなく確信度に掛けるのは、
+ * 解釈を選び直しても直らない（取りこぼしたバンドは戻ってこない）ため。
+ *
+ * 39 枚の実測で、正解と誤読が重ならない値を選んだ:
+ *
+ * | 指標 | 正解の最大 | 採用値 | 引っかかる誤読 |
+ * | ------ | ------------ | -------- | ---------------- |
+ * | 芯の間隔の変動係数 | 0.33 | 0.40 | `01-1ohm`（0.50） |
+ * | 許容差の間隔 ÷ 芯の間隔 | 2.44 | 4 | `15-339ohm`（8.00） |
+ *
+ * この 2 枚は**保留のなかで最も確信度が高い誤読**（0.36 / 0.35）で、
+ * 正解なのに保留になっている `05`（0.34）と `23`（0.33）を上回っていた。
+ * 減点すると確信度の順序が正しくなる（正解 → 誤読の順に並ぶ）。
+ */
+const GEOMETRY_CONFIDENCE = 0.7;
+
+/** 数字・倍率バンドの間隔の変動係数の上限。 */
+const CORE_GAP_CV_LIMIT = 0.4;
+
+/** 許容差バンドの手前の間隔が、数字・倍率の間隔の何倍までなら自然か。 */
+const TOLERANCE_GAP_RATIO_LIMIT = 4;
+
 /** 許容差の手前の間隔が他の中央値のこの倍率を超えたら「離れている」とみなす。 */
 const SPACING_DECISIVE_RATIO = 2;
 
@@ -257,6 +288,46 @@ function spacingCost(
   const oppositeGap = (direction === 'ltr' ? gaps[0] : gaps[gaps.length - 1]) as number;
   if (oppositeGap / median >= SPACING_DECISIVE_RATIO) return SPACING_COST_SCALE;
   return 0;
+}
+
+/**
+ * バンドの並びの幾何が、抵抗器として自然かどうか。
+ *
+ * 自然でなければ確信度を下げる（{@link GEOMETRY_CONFIDENCE}）。
+ * 許容差バンドを持たない 3 バンドの読みには効かせない — 「離すべき間隔」が
+ * 無いので、間隔の不揃いを異常と決めつけられないため。
+ */
+function isGeometryNatural(
+  runs: readonly JointRun[],
+  keptIndices: readonly number[],
+  direction: ReadDirection,
+  bandCount: number,
+): boolean {
+  if (bandCount < 4 || keptIndices.length < 4) return true;
+
+  const gaps: number[] = [];
+  for (let i = 1; i < keptIndices.length; i += 1) {
+    const previous = runs[keptIndices[i - 1] as number] as JointRun;
+    const current = runs[keptIndices[i] as number] as JointRun;
+    gaps.push(Math.max(0, current.start - previous.end));
+  }
+  if (gaps.length < 3) return true;
+
+  // 許容差バンドは読み取り方向の末尾に来る。その手前の間隔だけを分ける
+  const toleranceGap = (direction === 'ltr' ? gaps[gaps.length - 1] : gaps[0]) as number;
+  const core = direction === 'ltr' ? gaps.slice(0, -1) : gaps.slice(1);
+
+  const mean = core.reduce((sum, gap) => sum + gap, 0) / core.length;
+  if (mean <= 0) return true;
+
+  const variance = core.reduce((sum, gap) => sum + (gap - mean) ** 2, 0) / core.length;
+  if (Math.sqrt(variance) / mean > CORE_GAP_CV_LIMIT) return false;
+
+  const sorted = [...core].sort((a, b) => a - b);
+  const median = sorted[sorted.length >> 1] as number;
+  if (median <= 0) return true;
+
+  return toleranceGap / median <= TOLERANCE_GAP_RATIO_LIMIT;
 }
 
 /** ランごとの色候補（近い順、遠すぎるものは除外）。 */
@@ -410,7 +481,16 @@ export function jointReadResistor(
   // 同じ差でも確信度が下がってしまう（事前分布を入れた副作用で実際に起きた）。
   const margin =
     runnerUp === null ? 0.8 : clamp01((runnerUp.cost - chosen.cost) / CONFIDENCE_MARGIN_SCALE);
-  const plausibility = METALLIC_DIGIT_CONFIDENCE ** chosen.metallicDigits;
+  // 色がどれだけ近くても、並びがバンドの形をしていなければ当てにならない
+  const geometry = isGeometryNatural(
+    capRuns(runs),
+    chosen.keptIndices,
+    chosen.direction,
+    chosen.orientedColors.length,
+  )
+    ? 1
+    : GEOMETRY_CONFIDENCE;
+  const plausibility = METALLIC_DIGIT_CONFIDENCE ** chosen.metallicDigits * geometry;
   const confidence = clamp01(absolute * (0.4 + 0.6 * margin) * plausibility);
 
   // 採用した解釈を「画像上の並び順」に戻す。rtl のときは役割が末尾から付く。
