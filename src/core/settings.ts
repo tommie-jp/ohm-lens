@@ -47,14 +47,51 @@ const BODY_LIGHTNESS_WEIGHT = 0.6;
  */
 const ADAPT_WHITE_BALANCE = true;
 
+/**
+ * ランの切れ目とみなす ΔE（CIE76）。
+ *
+ * **誤答を出さないことを優先して選んでいる。** 本番条件での掃引（75 通り）では
+ * 正解の最大は 28 だが、そこには必ず誤答が 1 件残る。edgeΔE 20 は
+ * clusterΔE 10〜30 の全域で**誤答 0**になる平坦域で、正解 27・誤答 0。
+ * 正解 1 枚と誤答 1 枚を交換している。
+ * 「誤った値を自信ありげに出さない」方針（設計メモ §2 [5]）を、正解数より優先する。
+ */
+const EDGE_DELTA_E = 20;
+
+/**
+ * 本体クラスタで同じ色とみなす ΔE。
+ *
+ * edgeΔE 20 のもとでは 14 と 24 が同点（正解 27）。24 を採るのは、
+ * edgeΔE 16 側にも誤答 0 が続いていて平坦域が広いため
+ * （14 は edgeΔE 16 で誤答 1 に転ぶ）。
+ */
+const CLUSTER_DELTA_E = 24;
+
+/** これ未満の幅のランはノイズとして捨てる。掃引では 2 が全域で最良。 */
+const MIN_BAND_WIDTH = 2;
+
 /** ROI の切り出し条件。 */
 export const ROI_OPTIONS: RectifyOptions = { padding: ROI_PADDING, targetHeight: 40 };
+
+/**
+ * ラン分割のしきい値。**GUI・バッチ・較正がこれを共有すること。**
+ *
+ * 較正（`tests/fixtures/calibrate.test.ts`）はこれらを別に持っていて、
+ * 掃引で値を変えても追従しなかった。較正が意図的に変えてよいのは
+ * 本体範囲の余白と `keepEdgeRuns` だけで、分割のしきい値は同じにする。
+ */
+export const SEGMENT_THRESHOLDS = {
+  edgeDeltaE: EDGE_DELTA_E,
+  clusterDeltaE: CLUSTER_DELTA_E,
+  minBandWidth: MIN_BAND_WIDTH,
+  bodyLightnessWeight: BODY_LIGHTNESS_WEIGHT,
+} as const;
 
 /** 検出枠をカラーコードの並びで広げ直すときの条件。 */
 export function refineOptions(palette: Palette = DEFAULT_PALETTE): RefineOptions {
   return {
     rectify: ROI_OPTIONS,
-    segment: { palette, bodyLightnessWeight: BODY_LIGHTNESS_WEIGHT },
+    segment: { palette, ...SEGMENT_THRESHOLDS },
   };
 }
 
@@ -70,7 +107,7 @@ export function analyzeOptions(
   palette: Palette = DEFAULT_PALETTE,
 ): AnalyzeOptions {
   return {
-    segment: { palette, bodyLightnessWeight: BODY_LIGHTNESS_WEIGHT },
+    segment: { palette, ...SEGMENT_THRESHOLDS },
     bodyRange: bodyColumns(box, ROI_OPTIONS, BODY_MARGIN),
     adaptWhiteBalance: ADAPT_WHITE_BALANCE,
   };
