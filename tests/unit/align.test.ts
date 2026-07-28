@@ -91,4 +91,61 @@ describe('alignRunsToBands', () => {
     expect(alignRunsToBands([], ['yellow'])).toBeNull();
     expect(alignRunsToBands(runsOf(['yellow']), [])).toBeNull();
   });
+
+  describe('バンド側のスキップ（maxBandSkips）', () => {
+    it('既定ではバンドを飛ばさない（ラン不足なら null）', () => {
+      // Arrange: 金の許容差バンドが本体に溶けてランが 1 本足りない状況
+      const runs = runsOf(['brown', 'black']);
+
+      // Act / Assert: 従来どおり本数不足は対応付け不可
+      expect(alignRunsToBands(runs, ['brown', 'black', 'gold'])).toBeNull();
+    });
+
+    it('許可すればバンドを飛ばして対応付けられる', () => {
+      // Arrange
+      const runs = runsOf(['brown', 'black']);
+
+      // Act
+      const result = alignRunsToBands(runs, ['brown', 'black', 'gold'], { maxBandSkips: 1 });
+
+      // Assert: 飛ばした gold は割り当てに含めない（存在しない色を学習しないため）
+      expect(result).not.toBeNull();
+      expect(result?.assignments).toHaveLength(2);
+      expect(result?.assignments.map((a) => a.color)).toEqual(['brown', 'black']);
+    });
+
+    it('飛ばせる本数は上限で頭打ちになる', () => {
+      const runs = runsOf(['brown']);
+
+      expect(alignRunsToBands(runs, ['brown', 'black', 'gold'], { maxBandSkips: 1 })).toBeNull();
+      expect(alignRunsToBands(runs, ['brown', 'black', 'gold'], { maxBandSkips: 2 })).not.toBeNull();
+    });
+
+    it('飛ばすよりは対応付ける（全部飛ばしてコスト 0 に退化しない）', () => {
+      // Arrange: 色がぴったり合うランが揃っている
+      const runs = runsOf(['brown', 'black', 'gold']);
+
+      // Act
+      const result = alignRunsToBands(runs, ['brown', 'black', 'gold'], { maxBandSkips: 3 });
+
+      // Assert: スキップが安ければ「全部飛ばす」が最小コストになってしまう
+      expect(result?.assignments).toHaveLength(3);
+    });
+
+    it('スキップにはコストがかかる（合う色があるのに飛ばさない）', () => {
+      // Arrange: 1 本だけ色が合わないランが混じる
+      const runs = [
+        { lab: labOf('brown'), width: 10 },
+        { lab: labOf('black'), width: 10 },
+        { lab: labOf('gold'), width: 10 },
+      ];
+
+      // Act
+      const matched = alignRunsToBands(runs, ['brown', 'black', 'gold'], { maxBandSkips: 1 });
+
+      // Assert: 完全一致なのでコストはほぼ 0
+      expect(matched?.cost).toBeCloseTo(0, 3);
+    });
+  });
 });
+
