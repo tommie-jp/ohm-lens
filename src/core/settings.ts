@@ -41,6 +41,12 @@ const BODY_MARGIN = 0;
  */
 const BODY_LIGHTNESS_WEIGHT = 0.6;
 
+/**
+ * 本体色をアンカーにした色順応補正。
+ * 切ると 39 枚での一致が 30 → 13 枚まで落ちる。相対色分類の要。
+ */
+const ADAPT_WHITE_BALANCE = true;
+
 /** ROI の切り出し条件。 */
 export const ROI_OPTIONS: RectifyOptions = { padding: ROI_PADDING, targetHeight: 40 };
 
@@ -66,5 +72,6 @@ export function analyzeOptions(
   return {
     segment: { palette, bodyLightnessWeight: BODY_LIGHTNESS_WEIGHT },
     bodyRange: bodyColumns(box, ROI_OPTIONS, BODY_MARGIN),
+    adaptWhiteBalance: ADAPT_WHITE_BALANCE,
   };
 }

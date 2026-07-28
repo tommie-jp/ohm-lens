@@ -122,7 +122,8 @@ export async function annotateImage(
     .join(' ');
   const caption =
     `${label} | ${expected} → ` +
-    `${ohms === null ? '読取不可' : `${formatOhms(ohms)}${confident ? '' : '(保留)'}`} | ` +
+    `${ohms === null ? '読取不可' : `${formatOhms(ohms)}${confident ? '' : '(保留)'}`} ` +
+    `[確信度 ${(result.reading?.confidence ?? 0).toFixed(2)}] | ` +
     `${box.angleDeg.toFixed(0)}° L${Math.round(box.length)} T${Math.round(box.thickness)} ` +
     `(比 ${(box.length / box.thickness).toFixed(2)}) | ${bandSummary}`;
 
