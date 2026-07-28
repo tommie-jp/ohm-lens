@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { recoverToleranceRun } from '../../src/core/bands/recover.js';
+import { recoverFromPair, recoverToleranceRun } from '../../src/core/bands/recover.js';
 import { srgb255ToLab } from '../../src/core/color/colorSpace.js';
 import { BAND_SRGB, BODY_SRGB } from '../../src/core/color/colors.js';
 import type { BandColor, LabColor, ProfileSample } from '../../src/types.js';
@@ -97,5 +97,78 @@ describe('recoverToleranceRun', () => {
 
   it('空のプロファイルでも落ちない', () => {
     expect(recoverToleranceRun([], THREE)).toHaveLength(3);
+  });
+});
+
+/**
+ * ランが 2 本しか出なかったときの拾い直し。
+ *
+ * 2 本では `MIN_BANDS` に届かず読み取り不能なので、**何を足しても既存の
+ * 正しい読み取りを壊せない**。値が変わらない位置に限るという
+ * `recoverToleranceRun` の制約は、ここには当てはまらない。
+ */
+describe('recoverFromPair', () => {
+  /** 100 列の本体に 2 本だけ見つかった状態（中心 23 と 37、刻み 14）。 */
+  const PAIR: ColorRun[] = [runOf(20, 26, 'brown'), runOf(34, 40, 'green')];
+
+  it('刻みの 1 倍・2 倍先に色の変化があれば 2 本まで拾う', () => {
+    // Arrange: 予測位置は 51 と 65。金は本体と明度しか違わず、
+    //          全体のラン分割（ΔE 20）では切れない距離に置く
+    const profile = profileWith(100, [
+      { start: 20, end: 26, lab: bandLab('brown') },
+      { start: 34, end: 40, lab: bandLab('green') },
+      { start: 48, end: 54, lab: bandLab('gold') },
+      { start: 62, end: 68, lab: bandLab('gold') },
+    ]);
+
+    // Act
+    const runs = recoverFromPair(profile, PAIR);
+
+    // Assert
+    expect(runs).toHaveLength(4);
+    expect((runs[2] as ColorRun).start).toBeGreaterThanOrEqual(44);
+    expect((runs[3] as ColorRun).end).toBeLessThanOrEqual(72);
+  });
+
+  it('拾ったランは位置順に並ぶ', () => {
+    const profile = profileWith(100, [
+      { start: 20, end: 26, lab: bandLab('brown') },
+      { start: 34, end: 40, lab: bandLab('green') },
+      { start: 48, end: 54, lab: bandLab('gold') },
+      { start: 62, end: 68, lab: bandLab('gold') },
+    ]);
+
+    const runs = recoverFromPair(profile, PAIR);
+
+    const starts = runs.map((run) => run.start);
+    expect(starts).toStrictEqual([...starts].sort((a, b) => a - b));
+  });
+
+  it('先に色の変化が無ければ足さない', () => {
+    const profile = profileWith(100, [
+      { start: 20, end: 26, lab: bandLab('brown') },
+      { start: 34, end: 40, lab: bandLab('green') },
+    ]);
+
+    expect(recoverFromPair(profile, PAIR)).toHaveLength(2);
+  });
+
+  it('ランが 2 本でなければ何もしない', () => {
+    const profile = profileWith(100, [{ start: 48, end: 54, lab: bandLab('gold') }]);
+
+    expect(recoverFromPair(profile, PAIR.slice(0, 1))).toHaveLength(1);
+    expect(recoverFromPair(profile, [...PAIR, runOf(48, 54, 'gold')])).toHaveLength(3);
+  });
+
+  it('先に場所が残っていなければ探さない', () => {
+    // Arrange: 2 本が右端に寄っていて、刻み 1 つぶんの余地も無い
+    const shifted = [runOf(70, 76, 'brown'), runOf(84, 90, 'green')];
+    const profile = profileWith(100, [{ start: 92, end: 98, lab: bandLab('gold') }]);
+
+    expect(recoverFromPair(profile, shifted)).toHaveLength(2);
+  });
+
+  it('空のプロファイルでも落ちない', () => {
+    expect(recoverFromPair([], PAIR)).toHaveLength(2);
   });
 });

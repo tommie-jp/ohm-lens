@@ -39,6 +39,12 @@ const RECOVER_DELTA_E = 9;
 /** 拾い直したランの最小幅。これ未満はノイズとして捨てる。 */
 const MIN_WIDTH = 2;
 
+/** 2 本しか出なかったときに、刻みの何倍先まで探すか。 */
+const PAIR_STEPS = [1, 2] as const;
+
+/** 予測位置のまわりを探す窓の半幅（刻みに対する割合）。 */
+const PAIR_WINDOW = 0.5;
+
 export interface RecoverOptions {
   /** 本体色との差のしきい値（CIE76）。 */
   readonly deltaE?: number;
@@ -98,10 +104,25 @@ export function recoverToleranceRun(
   if (bodySamples.length === 0) return runs;
   const body = medianLab(bodySamples);
 
-  // 探索窓のなかで、本体色から離れている最長の連続区間を採る
-  const threshold = options.deltaE ?? RECOVER_DELTA_E;
+  const found = scanForRun(profile, body, from, to, options.deltaE ?? RECOVER_DELTA_E);
+  if (found === null) return runs;
+
+  return [...runs, found];
+}
+
+/**
+ * 探索窓のなかで、本体色から最も長く離れている連続区間をランとして返す。
+ * 見つからなければ null。
+ */
+function scanForRun(
+  profile: readonly ProfileSample[],
+  body: LabColor,
+  from: number,
+  to: number,
+  threshold: number,
+): ColorRun | null {
   const window = profile.filter((sample) => sample.x >= from && sample.x <= to);
-  if (window.length === 0) return runs;
+  if (window.length === 0) return null;
 
   let best: { start: number; end: number } | null = null;
   let current: { start: number; end: number } | null = null;
@@ -118,11 +139,74 @@ export function recoverToleranceRun(
     }
   }
 
-  if (best === null || best.end - best.start < MIN_WIDTH) return runs;
+  if (best === null || best.end - best.start < MIN_WIDTH) return null;
 
   const span = best;
-  const found = profile.filter((sample) => sample.x >= span.start && sample.x < span.end);
-  if (found.length === 0) return runs;
+  const samples = profile.filter((sample) => sample.x >= span.start && sample.x < span.end);
+  if (samples.length === 0) return null;
 
-  return [...runs, { start: span.start, end: span.end, lab: medianLab(found) }];
+  return { start: span.start, end: span.end, lab: medianLab(samples) };
+}
+
+/** どのランにも属さない列の中央値を本体色とみなす。 */
+function bodyColorOutside(
+  profile: readonly ProfileSample[],
+  runs: readonly ColorRun[],
+): LabColor | null {
+  const covered = new Set<number>();
+  for (const run of runs) for (let x = run.start; x < run.end; x += 1) covered.add(x);
+  const outside = profile.filter((sample) => !covered.has(sample.x));
+  return outside.length === 0 ? null : medianLab(outside);
+}
+
+/**
+ * ランが 2 本しか出なかったとき、その先を刻みで探して足す。
+ *
+ * `recoverToleranceRun` は「足しても値が変わらない位置」＝許容差バンドに
+ * 限って拾い直す。位置からの推測を格子に一般化すると、数字・倍率バンドを
+ * 挿入して値が直接変わるため悪化する（`docs/11` §3.5.1）。
+ *
+ * **2 本のときだけは、その制約が当てはまらない。** 2 本では `MIN_BANDS` に
+ * 届かず読み取り不能なので、既に正しく読めている写真を壊しようがない。
+ * 増えるのは「読取不可 → 値が出る」だけで、下振れは確信度で止められる。
+ *
+ * 実測では 02-1.5Ω と 04-4.7Ω がこれに当たる。どちらも金が**倍率**バンドで、
+ * 本体との CIE76 が 18 前後 — 全体のラン分割のしきい値 20 に届かず、
+ * 本体ランに飲み込まれている。位置を絞れば弱い基準で拾える。
+ *
+ * @param profile 解析範囲の 1D プロファイル（色順応補正済み）
+ * @param runs バンド候補のラン（位置順、2 本のときだけ働く）
+ */
+export function recoverFromPair(
+  profile: readonly ProfileSample[],
+  runs: readonly ColorRun[],
+  options: RecoverOptions = {},
+): readonly ColorRun[] {
+  if (runs.length !== 2 || profile.length === 0) return runs;
+
+  const first = runs[0] as ColorRun;
+  const second = runs[1] as ColorRun;
+  const pitch = centerOf(second) - centerOf(first);
+  if (pitch <= 0) return runs;
+
+  const end = (profile[profile.length - 1] as ProfileSample).x + 1;
+  // 刻み 1 つぶんの余地が先に無ければ、そもそも探す場所が無い
+  if (centerOf(second) + pitch >= end) return runs;
+
+  const body = bodyColorOutside(profile, runs);
+  if (body === null) return runs;
+
+  const threshold = options.deltaE ?? RECOVER_DELTA_E;
+  const half = pitch * PAIR_WINDOW;
+  const added: ColorRun[] = [];
+  for (const step of PAIR_STEPS) {
+    const center = centerOf(second) + pitch * step;
+    const found = scanForRun(profile, body, center - half, center + half, threshold);
+    // 直前に拾ったランと重なるものは同じバンドなので採らない
+    const previous = added[added.length - 1];
+    if (found === null || (previous !== undefined && found.start < previous.end)) continue;
+    added.push(found);
+  }
+
+  return added.length === 0 ? runs : [...runs, ...added];
 }
