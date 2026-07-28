@@ -8,100 +8,56 @@ import type { Palette } from '../core/color/palette.js';
  *
  * 「この写真のバンドが基準色からどれだけ離れているか」を目で確かめるための面。
  * 誤読を追うとき、`summary.txt` の色名だけでは「惜しかったのか、まるで違うのか」
- * が分からない。基準色を赤い `+`、この写真の実測色を赤い `○` で同じ面に置けば、
- * 引き寄せられた先がひと目で分かる。
+ * が分からない。基準色は**色名をその色で**、実測色は写真に焼いた**通し番号を
+ * その色で**同じ面に置けば、どのバンドがどこへ引き寄せられたかが追える。
  *
- * **RGB と Lab の両方を 3 軸のまま描く。** a\*b\* 平面だけだと黒・灰・白・銀が
- * すべて原点に重なり、いちばん取り違えやすい組が見えなくなる。真の等角投影は
- * 灰色軸に沿って見るので黒と白が重なってしまうため、斜投影にしている。
+ * 面は 2 軸の平面図を 4 枚。立体図もかつて描いていたが、重なった点の前後関係が
+ * 読めないうえ場所を食うのでやめた。**どの成分で近いのかは平面図のほうが速い。**
+ *
+ * | 空間 | 面 |
+ * | ------ | ---- |
+ * | RGB | `B-R`、`G-B` |
+ * | CIE L\*a\*b\* | `b*-a*`、`b*-L*` |
+ *
+ * 軸は**先に書いたほうが横**（`B-R` なら横が B、縦が R）。
  */
 
-/** 立体の面 1 つの一辺 [px]。 */
-const FACE_SIZE = 180;
+/** 面 1 つの一辺 [px]。 */
+const PLANE_SIZE = 200;
 
-/** 平面の面 1 つの一辺 [px]。 */
-const PLANE_SIZE = 150;
+/** 面の左に空ける幅 [px]（縦軸の目盛りと軸名のぶん）。 */
+const AXIS_GUTTER = 34;
 
-/** 軸ラベルを置く位置（辺の長さに対する割合）。 */
-const AXIS_TIP = 1.15;
+/** 面の下に空ける高さ [px]（横軸の目盛りと軸名のぶん）。 */
+const AXIS_FOOTER = 34;
 
-/** 面の余白 [px]。 */
+/** 面の見出しの高さ [px]。 */
+const TITLE_HEIGHT = 15;
+
+/** 座標一覧の 1 行の高さ [px]。 */
+const LIST_LINE_HEIGHT = 12;
+
+/** 座標一覧に使う最大行数。あふれたら打ち切る。 */
+const LIST_MAX_LINES = 2;
+
+/** 1 行に収める座標の個数。 */
+const LIST_PER_LINE = 4;
+
 const MARGIN = 12;
+const GAP = 20;
 
-/** 面と面の間隔 [px]。 */
-const FACE_GAP = 22;
+/** 面 1 つが占める領域 [px]。 */
+const CELL_WIDTH = AXIS_GUTTER + PLANE_SIZE;
+const CELL_HEIGHT =
+  TITLE_HEIGHT + PLANE_SIZE + AXIS_FOOTER + LIST_LINE_HEIGHT * LIST_MAX_LINES;
 
-/** 見出しの高さ [px]。 */
-const TITLE_HEIGHT = 16;
-
-/**
- * Lab の a\*・b\* を 0..1 に正規化する範囲。
- * バンド色は概ねこの中に収まる。外れた値は端に張り付く。
- */
-const CHROMA_MIN = -60;
-const CHROMA_MAX = 80;
-
-/** 斜投影の角度 [rad]。等角にすると灰色軸方向に潰れて黒と白が重なる。 */
-const YAW = (35 * Math.PI) / 180;
-const PITCH = (25 * Math.PI) / 180;
+/** パネル帯の幅・高さ [px]。2 行 2 列。 */
+export const COLOR_SPACE_PANEL_WIDTH = MARGIN * 2 + CELL_WIDTH * 2 + GAP;
+export const COLOR_SPACE_PANEL_HEIGHT = MARGIN * 2 + CELL_HEIGHT * 2 + GAP;
 
 export interface Point2 {
   readonly x: number;
   readonly y: number;
-}
-
-/**
- * 投影後の面の広がり（原点からの距離 [px]）。
- * 立方体の頂点と軸ラベルの先まで含めた実寸から出す。
- */
-const EXTENT = (() => {
-  const points: Point2[] = [];
-  for (const x of [0, 1, AXIS_TIP]) {
-    for (const y of [0, 1, AXIS_TIP]) {
-      for (const z of [0, 1, AXIS_TIP]) points.push(projectRaw(x, y, z));
-    }
-  }
-  return {
-    left: -Math.min(...points.map((p) => p.x)),
-    right: Math.max(...points.map((p) => p.x)),
-    top: -Math.min(...points.map((p) => p.y)),
-    bottom: Math.max(...points.map((p) => p.y)),
-  };
-})();
-
-/** 面 1 つが占める幅と高さ [px]。 */
-const FACE_WIDTH = EXTENT.left + EXTENT.right;
-const FACE_HEIGHT = EXTENT.top + EXTENT.bottom;
-
-/** 平面 1 つが占める幅と高さ（軸ラベルの余地を含む） [px]。 */
-const PLANE_WIDTH = PLANE_SIZE + 26;
-const PLANE_HEIGHT = PLANE_SIZE + 18;
-
-/** 1 行が占める高さ [px]（見出し + 面のうち高いほう）。 */
-const ROW_HEIGHT = TITLE_HEIGHT + Math.max(FACE_HEIGHT, PLANE_HEIGHT);
-
-/** パネル帯の高さ [px]。RGB と Lab で 2 行。 */
-export const COLOR_SPACE_PANEL_HEIGHT = Math.ceil(ROW_HEIGHT * 2 + MARGIN * 3);
-
-/** パネル帯の幅 [px]。1 行は「立体 1 面 + 平面 2 面」。 */
-export const COLOR_SPACE_PANEL_WIDTH = Math.ceil(
-  FACE_WIDTH + PLANE_WIDTH * 2 + FACE_GAP * 2 + MARGIN * 2,
-);
-
-/**
- * 0..1 の 3 次元座標を面の中の 2 次元座標へ落とす。
- * 戻り値は面の原点（左下の立方体の原点）を (0, 0) とした px。
- */
-function projectRaw(x: number, y: number, z: number): Point2 {
-  const rotatedX = x * Math.cos(YAW) - z * Math.sin(YAW);
-  const depth = x * Math.sin(YAW) + z * Math.cos(YAW);
-  const rotatedY = y * Math.cos(PITCH) - depth * Math.sin(PITCH);
-  // SVG は y が下向きなので符号を反転する
-  return { x: rotatedX * FACE_SIZE, y: -rotatedY * FACE_SIZE };
-}
-
-export function projectToPanel(x: number, y: number, z: number): Point2 {
-  return projectRaw(x, y, z);
 }
 
 export interface ColorSpaceOptions {
@@ -112,80 +68,91 @@ export interface ColorSpaceOptions {
   readonly japanese?: boolean;
 }
 
-/** 立方体の 12 辺（頂点は 0/1 の組み合わせ）。 */
-const CUBE_EDGES: readonly (readonly [readonly number[], readonly number[]])[] = (() => {
-  const corners = [0, 1].flatMap((x) => [0, 1].flatMap((y) => [0, 1].map((z) => [x, y, z])));
-  const edges: [readonly number[], readonly number[]][] = [];
-  for (const from of corners) {
-    for (const to of corners) {
-      const diff = from.reduce((sum, value, i) => sum + Math.abs(value - (to[i] as number)), 0);
-      // 1 軸だけ違う組が辺。順序を固定して重複を除く
-      if (diff === 1 && from.join() < to.join()) edges.push([from, to]);
-    }
-  }
-  return edges;
-})();
-
-/** 面の中の座標を、元画像の座標へ移す。 */
-function place(origin: Point2, point: Point2): Point2 {
-  return { x: origin.x + point.x, y: origin.y + point.y };
+/** 面の 1 軸。目盛りは実寸の値で持つ。 */
+interface Axis {
+  readonly label: string;
+  readonly min: number;
+  readonly max: number;
+  readonly ticks: readonly number[];
 }
 
-function line(from: Point2, to: Point2, stroke: string, width: number, opacity = 1): string {
-  return (
-    `<line x1="${from.x.toFixed(1)}" y1="${from.y.toFixed(1)}" ` +
-    `x2="${to.x.toFixed(1)}" y2="${to.y.toFixed(1)}" ` +
-    `stroke="${stroke}" stroke-width="${width}" opacity="${opacity}" />`
-  );
+const UNIT_AXIS = (label: string): Axis => ({
+  label,
+  min: 0,
+  max: 1,
+  ticks: [0, 0.25, 0.5, 0.75, 1],
+});
+
+/** Lab の a\*・b\* の表示範囲。バンド色は概ねこの中に収まる。 */
+const CHROMA_AXIS = (label: string): Axis => ({
+  label,
+  min: -60,
+  max: 80,
+  ticks: [-60, -30, 0, 30, 60],
+});
+
+const LIGHTNESS_AXIS: Axis = { label: 'L*', min: 0, max: 100, ticks: [0, 25, 50, 75, 100] };
+
+interface PlaneSpec {
+  readonly title: string;
+  readonly x: Axis;
+  readonly y: Axis;
+  /** その色の (横, 縦) を軸の実寸で返す */
+  readonly at: (lab: LabColor) => readonly [number, number];
+  /** 一覧に出すときの桁 */
+  readonly digits: number;
 }
 
-function label(
+const PLANES: readonly PlaneSpec[] = [
+  {
+    title: 'B-R',
+    x: UNIT_AXIS('B'),
+    y: UNIT_AXIS('R'),
+    at: (lab) => {
+      const { r, b } = labToRgb(lab);
+      return [b, r];
+    },
+    digits: 2,
+  },
+  {
+    title: 'G-B',
+    x: UNIT_AXIS('G'),
+    y: UNIT_AXIS('B'),
+    at: (lab) => {
+      const { g, b } = labToRgb(lab);
+      return [g, b];
+    },
+    digits: 2,
+  },
+  {
+    title: 'b*-a*',
+    x: CHROMA_AXIS('b*'),
+    y: CHROMA_AXIS('a*'),
+    at: (lab) => [lab.b, lab.a],
+    digits: 0,
+  },
+  {
+    title: 'b*-L*',
+    x: CHROMA_AXIS('b*'),
+    y: LIGHTNESS_AXIS,
+    at: (lab) => [lab.b, lab.l],
+    digits: 0,
+  },
+];
+
+function text(
   at: Point2,
-  text: string,
+  content: string,
   size: number,
   fill: string,
-  halo = false,
-  anchor: 'middle' | 'start' = 'middle',
+  options: { readonly anchor?: 'middle' | 'start' | 'end'; readonly className?: string } = {},
 ): string {
-  // 印の上に重なっても読めるよう、必要なら白フチを付ける
-  const stroke = halo
-    ? `stroke="rgba(255,255,255,0.9)" stroke-width="${(size * 0.4).toFixed(1)}" paint-order="stroke" `
-    : '';
+  const className = options.className === undefined ? '' : `class="${options.className}" `;
   return (
-    `<text x="${at.x.toFixed(1)}" y="${at.y.toFixed(1)}" font-family="sans-serif" ` +
-    `font-size="${size}" fill="${fill}" text-anchor="${anchor}" ` +
-    `${stroke}dominant-baseline="central">${text}</text>`
+    `<text ${className}x="${at.x.toFixed(1)}" y="${at.y.toFixed(1)}" font-family="sans-serif" ` +
+    `font-size="${size}" fill="${fill}" text-anchor="${options.anchor ?? 'middle'}" ` +
+    `dominant-baseline="central">${content}</text>`
   );
-}
-
-/** 立方体の枠と 3 本の軸ラベルを描く。 */
-function frame(origin: Point2, axes: readonly [string, string, string]): string {
-  const parts = CUBE_EDGES.map(([from, to]) =>
-    line(
-      place(origin, projectToPanel(from[0] as number, from[1] as number, from[2] as number)),
-      place(origin, projectToPanel(to[0] as number, to[1] as number, to[2] as number)),
-      '#b0b0b8',
-      1,
-      0.9,
-    ),
-  );
-
-  const tips: [number, number, number][] = [
-    [AXIS_TIP, 0, 0],
-    [0, AXIS_TIP, 0],
-    [0, 0, AXIS_TIP],
-  ];
-  tips.forEach(([x, y, z], index) => {
-    parts.push(
-      label(
-        place(origin, projectToPanel(x, y, z)),
-        axes[index] as string,
-        11,
-        '#6b6b73',
-      ),
-    );
-  });
-  return parts.join('');
 }
 
 /**
@@ -196,7 +163,7 @@ function frame(origin: Point2, axes: readonly [string, string, string]): string 
  */
 function coloredText(
   at: Point2,
-  text: string,
+  content: string,
   lab: LabColor,
   size: number,
   className: string,
@@ -207,76 +174,99 @@ function coloredText(
     `font-family="sans-serif" font-size="${size}" font-weight="700" ` +
     `text-anchor="middle" dominant-baseline="central" ` +
     `stroke="${halo}" stroke-width="${(size * 0.3).toFixed(1)}" paint-order="stroke" ` +
-    `fill="${labToCss(lab)}">${text}</text>`
+    `fill="${labToCss(lab)}">${content}</text>`
   );
 }
 
-/** 基準色の印。色名をその色で書く。 */
-function referenceMark(at: Point2, lab: LabColor, name: string): string {
-  return coloredText(at, name, lab, 10, 'ref-name');
+/** 軸の値を 0..1 の位置に直す（範囲外は端に張り付く）。 */
+function normalize(axis: Axis, value: number): number {
+  const ratio = (value - axis.min) / (axis.max - axis.min);
+  return Math.min(1, Math.max(0, ratio));
 }
 
-/** 実測色の印。カラーコードの番号をその色で書く（画像に焼いた番号と対応）。 */
-function observedMark(at: Point2, lab: LabColor, number: number): string {
-  return coloredText(at, String(number), lab, 13, 'observed-number');
-}
-
-/**
- * 2 次元の面（平面図）を描く。
- *
- * 立体図は全体の散らばりを掴むのに向くが、重なった点の前後関係が読めない。
- * 指定の 2 軸だけを見る平面図を並べると、どの成分で近いのかがはっきりする。
- * 軸は**先に書いたほうが横**（`B-R` なら横が B、縦が R）。
- */
-function planeFace(
-  origin: Point2,
-  title: string,
-  axes: readonly [string, string],
-  points: readonly { readonly at: Point2; readonly draw: (at: Point2) => string }[],
-): string {
-  const parts: string[] = [
-    label({ x: origin.x + PLANE_SIZE / 2, y: origin.y - 8 }, title, 11, '#33333a'),
-    `<rect x="${origin.x}" y="${origin.y}" width="${PLANE_SIZE}" height="${PLANE_SIZE}" ` +
-      `fill="none" stroke="#b0b0b8" stroke-width="1" />`,
-    label({ x: origin.x + PLANE_SIZE / 2, y: origin.y + PLANE_SIZE + 9 }, axes[0], 10, '#6b6b73'),
-    label({ x: origin.x - 12, y: origin.y + PLANE_SIZE / 2 }, axes[1], 10, '#6b6b73'),
-  ];
-  for (const point of points) parts.push(point.draw(point.at));
-  return parts.join('');
-}
-
-/** 0..1 の (横, 縦) を平面の中の座標へ。縦は上向きにする。 */
-function onPlane(origin: Point2, horizontal: number, vertical: number): Point2 {
+/** 面の中の位置（縦は上向き）。 */
+function locate(origin: Point2, plane: PlaneSpec, value: readonly [number, number]): Point2 {
   return {
-    x: origin.x + clamp01(horizontal) * PLANE_SIZE,
-    y: origin.y + (1 - clamp01(vertical)) * PLANE_SIZE,
+    x: origin.x + normalize(plane.x, value[0]) * PLANE_SIZE,
+    y: origin.y + (1 - normalize(plane.y, value[1])) * PLANE_SIZE,
   };
 }
 
-function clamp01(value: number): number {
-  return Math.min(1, Math.max(0, value));
+/** 目盛りの数値。整数なら小数点を付けない。 */
+function formatTick(value: number): string {
+  return Number.isInteger(value) ? String(value) : String(value);
 }
 
-function normalizeChroma(value: number): number {
-  return (value - CHROMA_MIN) / (CHROMA_MAX - CHROMA_MIN);
+/** 枠・格子・目盛り・軸名を描く。 */
+function planeFrame(origin: Point2, plane: PlaneSpec): string {
+  const parts: string[] = [
+    text({ x: origin.x + PLANE_SIZE / 2, y: origin.y - 8 }, plane.title, 12, '#33333a'),
+    `<rect x="${origin.x}" y="${origin.y}" width="${PLANE_SIZE}" height="${PLANE_SIZE}" ` +
+      `fill="#ffffff" stroke="#9a9aa2" stroke-width="1" />`,
+  ];
+
+  for (const tick of plane.x.ticks) {
+    const x = origin.x + normalize(plane.x, tick) * PLANE_SIZE;
+    parts.push(
+      `<line class="grid" x1="${x.toFixed(1)}" y1="${origin.y}" ` +
+        `x2="${x.toFixed(1)}" y2="${origin.y + PLANE_SIZE}" stroke="#e2e2e8" stroke-width="1" />`,
+      text({ x, y: origin.y + PLANE_SIZE + 8 }, formatTick(tick), 9, '#6b6b73', {
+        className: 'tick-label',
+      }),
+    );
+  }
+  for (const tick of plane.y.ticks) {
+    const y = origin.y + (1 - normalize(plane.y, tick)) * PLANE_SIZE;
+    parts.push(
+      `<line class="grid" x1="${origin.x}" y1="${y.toFixed(1)}" ` +
+        `x2="${origin.x + PLANE_SIZE}" y2="${y.toFixed(1)}" stroke="#e2e2e8" stroke-width="1" />`,
+      text({ x: origin.x - 5, y }, formatTick(tick), 9, '#6b6b73', {
+        anchor: 'end',
+        className: 'tick-label',
+      }),
+    );
+  }
+
+  parts.push(
+    text({ x: origin.x + PLANE_SIZE / 2, y: origin.y + PLANE_SIZE + 20 }, plane.x.label, 10, '#44444c'),
+    text({ x: origin.x - AXIS_GUTTER + 8, y: origin.y + PLANE_SIZE / 2 }, plane.y.label, 10, '#44444c'),
+  );
+  return parts.join('');
 }
 
-/** Lab を Lab 面の 0..1 座標へ。縦軸が L\*。 */
-function labCoords(lab: LabColor): [number, number, number] {
-  return [normalizeChroma(lab.a), lab.l / 100, normalizeChroma(lab.b)];
-}
+/** 面の下に「1 (0.20, 0.61) 2 (...)」を並べる。 */
+function valueList(origin: Point2, plane: PlaneSpec, observed: readonly LabColor[]): string {
+  const entries = observed.map((lab, index) => {
+    const [x, y] = plane.at(lab);
+    return `${index + 1} (${x.toFixed(plane.digits)}, ${y.toFixed(plane.digits)})`;
+  });
 
-/** Lab を RGB 面の 0..1 座標へ（色域外はクランプ済み）。 */
-function rgbCoords(lab: LabColor): [number, number, number] {
-  const { r, g, b } = labToRgb(lab);
-  return [r, g, b];
+  const lines: string[] = [];
+  for (let at = 0; at < entries.length; at += LIST_PER_LINE) {
+    lines.push(entries.slice(at, at + LIST_PER_LINE).join('  '));
+  }
+
+  const shown = lines.slice(0, LIST_MAX_LINES);
+  if (lines.length > LIST_MAX_LINES) shown[LIST_MAX_LINES - 1] += ' …';
+
+  return shown
+    .map((line, index) =>
+      text(
+        { x: origin.x, y: origin.y + PLANE_SIZE + AXIS_FOOTER + LIST_LINE_HEIGHT * index },
+        line,
+        9,
+        '#44444c',
+        { anchor: 'start', className: 'value-list' },
+      ),
+    )
+    .join('');
 }
 
 /**
  * 色空間パネルの SVG を返す。
  *
- * @param palette 基準色（赤い + で置く）
- * @param observed この写真で検出したバンドの実測色（赤い ○ で置く）
+ * @param palette 基準色（色名をその色で置く）
+ * @param observed この写真で検出したバンドの実測色（通し番号をその色で置く）
  */
 export function buildColorSpaceSvg(
   palette: Palette,
@@ -286,81 +276,31 @@ export function buildColorSpaceSvg(
   const japanese = options.japanese ?? true;
   const nameOf = (color: BandColor): string =>
     japanese ? BAND_COLOR_JA[color] : BAND_COLOR_ABBR[color];
-
   const entries = Object.entries(palette.colors) as [BandColor, LabColor][];
+
   const parts: string[] = [
     `<rect x="${options.x}" y="${options.y}" width="${COLOR_SPACE_PANEL_WIDTH}" ` +
       `height="${COLOR_SPACE_PANEL_HEIGHT}" fill="rgba(255,255,255,0.93)" />`,
   ];
 
-  /** 1 行ぶん（立体 1 面 + 平面 2 面）を描く。 */
-  const row = (
-    index: number,
-    title: string,
-    coords: (lab: LabColor) => [number, number, number],
-    solidAxes: readonly [string, string, string],
-    planes: readonly {
-      readonly title: string;
-      readonly axes: readonly [string, string];
-      /** 3 成分から (横, 縦) を選ぶ */
-      readonly pick: (c: [number, number, number]) => [number, number];
-    }[],
-  ): void => {
-    const top = options.y + MARGIN + (ROW_HEIGHT + MARGIN) * index;
-    // 見出しは行の左端に置く（立体の軸ラベルと重ならないように）
-    parts.push(
-      label({ x: options.x + 6, y: top + 8 }, title, 12, '#33333a', false, 'start'),
-    );
-
-    const solidOrigin: Point2 = {
-      x: options.x + MARGIN + EXTENT.left,
-      y: top + TITLE_HEIGHT + EXTENT.top,
+  PLANES.forEach((plane, index) => {
+    const origin: Point2 = {
+      x: options.x + MARGIN + AXIS_GUTTER + (CELL_WIDTH + GAP) * (index % 2),
+      y: options.y + MARGIN + TITLE_HEIGHT + (CELL_HEIGHT + GAP) * Math.floor(index / 2),
     };
-    parts.push(frame(solidOrigin, solidAxes));
+
+    parts.push(planeFrame(origin, plane));
+    // 基準色を先に、実測色の番号をあとに（番号を手前に出す）
     for (const [color, lab] of entries) {
-      const [x, y, z] = coords(lab);
-      parts.push(
-        referenceMark(place(solidOrigin, projectToPanel(x, y, z)), lab, nameOf(color)),
-      );
+      parts.push(coloredText(locate(origin, plane, plane.at(lab)), nameOf(color), lab, 10, 'ref-name'));
     }
     observed.forEach((lab, number) => {
-      const [x, y, z] = coords(lab);
-      parts.push(observedMark(place(solidOrigin, projectToPanel(x, y, z)), lab, number + 1));
+      parts.push(
+        coloredText(locate(origin, plane, plane.at(lab)), String(number + 1), lab, 13, 'observed-number'),
+      );
     });
-
-    planes.forEach((plane, column) => {
-      const origin: Point2 = {
-        x: options.x + MARGIN + FACE_WIDTH + FACE_GAP + (PLANE_WIDTH + FACE_GAP) * column + 14,
-        y: top + TITLE_HEIGHT + 4,
-      };
-      const marks = [
-        ...entries.map(([color, lab]) => {
-          const [h, v] = plane.pick(coords(lab));
-          return {
-            at: onPlane(origin, h, v),
-            draw: (at: Point2) => referenceMark(at, lab, nameOf(color)),
-          };
-        }),
-        ...observed.map((lab, number) => {
-          const [h, v] = plane.pick(coords(lab));
-          return {
-            at: onPlane(origin, h, v),
-            draw: (at: Point2) => observedMark(at, lab, number + 1),
-          };
-        }),
-      ];
-      parts.push(planeFace(origin, plane.title, plane.axes, marks));
-    });
-  };
-
-  row(0, 'RGB', rgbCoords, ['R', 'G', 'B'], [
-    { title: 'B-R', axes: ['B', 'R'], pick: ([r, , b]) => [b, r] },
-    { title: 'G-B', axes: ['G', 'B'], pick: ([, g, b]) => [g, b] },
-  ]);
-  row(1, 'CIE L*a*b*', labCoords, ['a*', 'L*', 'b*'], [
-    { title: 'b*-a*', axes: ['b*', 'a*'], pick: ([a, , b]) => [b, a] },
-    { title: 'b*-L*', axes: ['b*', 'L*'], pick: ([, l, b]) => [b, l] },
-  ]);
+    parts.push(valueList(origin, plane, observed));
+  });
 
   return parts.join('');
 }
