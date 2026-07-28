@@ -4,7 +4,7 @@ import { locateResistor } from '../core/locate.js';
 import { rectify } from '../core/rectify.js';
 import { refineBoxExtent } from '../core/refine.js';
 import { analyzeOptions, refineOptions, ROI_OPTIONS } from '../core/settings.js';
-import { formatOhms, isReportable } from '../core/format.js';
+import { formatConfidence, formatOhms, isReportable } from '../core/format.js';
 import { jointReadResistor } from '../core/value/jointDecode.js';
 import { DEFAULT_PALETTE, type Palette } from '../core/color/palette.js';
 import type { RoiImage } from '../core/bands/profile.js';
@@ -123,7 +123,7 @@ export async function annotateImage(
   const caption =
     `${label} | ${expected} → ` +
     `${ohms === null ? '読取不可' : `${formatOhms(ohms)}${confident ? '' : '(保留)'}`} ` +
-    `[確信度 ${(result.reading?.confidence ?? 0).toFixed(2)}] | ` +
+    `[確信度 ${formatConfidence(result.reading?.confidence ?? 0)}] | ` +
     `${box.angleDeg.toFixed(0)}° L${Math.round(box.length)} T${Math.round(box.thickness)} ` +
     `(比 ${(box.length / box.thickness).toFixed(2)}) | ${bandSummary}`;
 

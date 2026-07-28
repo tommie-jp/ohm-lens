@@ -1,4 +1,5 @@
 import type { ResistorReading } from '../types.js';
+import { clamp01 } from './math.js';
 
 /**
  * 抵抗値の表示用フォーマットと、値を出してよいかの判定。
@@ -36,6 +37,15 @@ const UNITS: readonly { readonly threshold: number; readonly suffix: string }[] 
 /** 有効数字 3 桁で末尾の 0 を落とす。 */
 function trimNumber(value: number): string {
   return Number.parseFloat(value.toPrecision(3)).toString();
+}
+
+/**
+ * 確信度を「35%」のように表記する。
+ * 0..1 の生値より、人が読むときの目盛りとして分かりやすい。
+ */
+export function formatConfidence(confidence: number): string {
+  if (!Number.isFinite(confidence)) return '?';
+  return `${Math.round(clamp01(confidence) * 100)}%`;
 }
 
 /** 抵抗値を 4.7kΩ のような表記にする。 */

@@ -46,18 +46,28 @@ describe('buildColorSpaceSvg', () => {
     // Arrange / Act
     const svg = buildColorSpaceSvg(DEFAULT_PALETTE, [], { x: 0, y: 0 });
 
-    // Assert: 12 色 × 2 面（RGB と Lab）
+    // Assert: 12 色 × 6 面（RGB と Lab、それぞれ立体 1 面と平面 2 面）
     const plusMarks = svg.match(/class="ref-plus"/g) ?? [];
-    expect(plusMarks).toHaveLength(24);
+    expect(plusMarks).toHaveLength(72);
   });
 
   it('実測色は本数ぶんの赤い ○ が出る', () => {
     // Act
     const svg = buildColorSpaceSvg(DEFAULT_PALETTE, observed, { x: 0, y: 0 });
 
-    // Assert: 2 本 × 2 面
+    // Assert: 2 本 × 6 面
     const circles = svg.match(/class="observed-ring"/g) ?? [];
-    expect(circles).toHaveLength(4);
+    expect(circles).toHaveLength(12);
+  });
+
+  it('2 次元の面には軸名が出る', () => {
+    // Act
+    const svg = buildColorSpaceSvg(DEFAULT_PALETTE, observed, { x: 0, y: 0 });
+
+    // Assert: 指定された 4 つの平面
+    for (const title of ['B-R', 'G-B', 'b*-a*', 'b*-L*']) {
+      expect(svg).toContain(title);
+    }
   });
 
   it('バンドが 1 本も無くても壊れない', () => {

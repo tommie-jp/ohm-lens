@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  formatConfidence,
   formatOhms,
   formatReading,
   isReportable,
@@ -81,5 +82,23 @@ describe('formatReading', () => {
 
   it('閾値を指定できる', () => {
     expect(formatReading(reading({ confidence: 0.6 }), 0.9)).toBe('?');
+  });
+});
+
+describe('formatConfidence', () => {
+  it('百分率にして整数で丸める', () => {
+    expect(formatConfidence(0)).toBe('0%');
+    expect(formatConfidence(0.354)).toBe('35%');
+    expect(formatConfidence(0.355)).toBe('36%');
+    expect(formatConfidence(1)).toBe('100%');
+  });
+
+  it('0..1 の外は丸め込む', () => {
+    expect(formatConfidence(-0.5)).toBe('0%');
+    expect(formatConfidence(1.5)).toBe('100%');
+  });
+
+  it('数値でなければ ?', () => {
+    expect(formatConfidence(Number.NaN)).toBe('?');
   });
 });

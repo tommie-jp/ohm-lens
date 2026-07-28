@@ -15,7 +15,12 @@ import {
 import { parseOhms } from '../core/value/parseOhms.js';
 import { clearObservations, loadObservations, saveObservations } from './learnStore.js';
 import { releaseWakeLock, requestWakeLock } from './wakeLock.js';
-import { formatOhms, formatReading, MIN_REPORTABLE_CONFIDENCE } from '../core/format.js';
+import {
+  formatConfidence,
+  formatOhms,
+  formatReading,
+  MIN_REPORTABLE_CONFIDENCE,
+} from '../core/format.js';
 import { clamp } from '../core/math.js';
 import type { Band, BandColor, LabColor } from '../types.js';
 import { createSampleCanvas } from './sample.js';
@@ -307,7 +312,7 @@ function renderBands(bands: readonly Band[]): void {
 
     row.insertCell().textContent = `${band.start}–${band.end}`;
     row.insertCell().textContent = String(band.end - band.start);
-    row.insertCell().textContent = band.confidence.toFixed(2);
+    row.insertCell().textContent = formatConfidence(band.confidence);
   });
 
   renderLabelJson();
@@ -397,10 +402,10 @@ function renderReading(result: AnalysisResult): void {
       result.bands.length === 0 ? 'バンドを検出できません' : '値として解釈できません';
   } else if (result.reading.confidence < MIN_REPORTABLE_CONFIDENCE) {
     elements.readingNote.textContent =
-      `確信度 ${result.reading.confidence.toFixed(2)} が低いため未確定` +
+      `確信度 ${formatConfidence(result.reading.confidence)} が低いため未確定` +
       `（候補 ${formatOhms(result.reading.ohms)}）`;
   } else {
-    elements.readingNote.textContent = `確信度 ${result.reading.confidence.toFixed(2)}`;
+    elements.readingNote.textContent = `確信度 ${formatConfidence(result.reading.confidence)}`;
   }
 
   const rows: [string, string][] = [];
@@ -411,7 +416,7 @@ function renderReading(result: AnalysisResult): void {
         ? `（閾値未満: ${formatOhms(reading.ohms)}）`
         : '';
     rows.push(
-      ['確信度', `${reading.confidence.toFixed(2)}${suppressed}`],
+      ['確信度', `${formatConfidence(reading.confidence)}${suppressed}`],
       ['読み取り方向', reading.direction],
       ['E系列', reading.series],
       ['スナップ前', `${reading.rawOhms} Ω`],
