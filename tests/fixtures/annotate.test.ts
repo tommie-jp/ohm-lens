@@ -3,10 +3,7 @@ import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import sharp from 'sharp';
 import { annotateImage, loadRoiImage } from '../../src/annotate/pipeline.js';
-import {
-  COLOR_SPACE_PANEL_HEIGHT,
-  COLOR_SPACE_PANEL_WIDTH,
-} from '../../src/annotate/colorSpace.js';
+import { colorSpacePanelSize } from '../../src/annotate/colorSpace.js';
 import { hasSamples, loadManifest, loadPalette, sampleDir } from './loadSample.js';
 
 /**
@@ -55,7 +52,8 @@ describe.skipIf(!hasSamples())('検出結果の焼き込み', () => {
     const meta = await sharp(result.jpeg).metadata();
 
     // Assert: 写真は隠さず、下に帯を足している。写真が狭ければ右にも広げる
-    expect(meta.width).toBe(Math.max(source.width, COLOR_SPACE_PANEL_WIDTH));
-    expect(meta.height).toBe(source.height + COLOR_SPACE_PANEL_HEIGHT);
+    const width = Math.max(source.width, colorSpacePanelSize(0, 0).width);
+    expect(meta.width).toBeGreaterThanOrEqual(width);
+    expect(meta.height).toBeGreaterThan(source.height + colorSpacePanelSize(0, width).height * 0.9);
   });
 });

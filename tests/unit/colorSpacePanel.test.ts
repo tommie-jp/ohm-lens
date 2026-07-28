@@ -1,9 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import {
-  buildColorSpaceSvg,
-  COLOR_SPACE_PANEL_HEIGHT,
-  COLOR_SPACE_PANEL_WIDTH,
-} from '../../src/annotate/colorSpace.js';
+import { buildColorSpaceSvg, colorSpacePanelSize } from '../../src/annotate/colorSpace.js';
 import { DEFAULT_PALETTE } from '../../src/core/color/palette.js';
 import { srgb255ToLab } from '../../src/core/color/colorSpace.js';
 
@@ -70,13 +66,31 @@ describe('buildColorSpaceSvg', () => {
     expect(grid.length).toBeGreaterThan(FACE_COUNT * 6);
   });
 
-  it('面の下に番号と座標の一覧を出す', () => {
+  it('面の下に 1 バンド 1 行で座標と近い色を出す', () => {
     const svg = buildColorSpaceSvg(DEFAULT_PALETTE, observed, { x: 0, y: 0 });
 
+    // 4 面 × 2 バンド ぶんの行
     const lists = svg.match(/class="value-list"/g) ?? [];
-    expect(lists.length).toBeGreaterThanOrEqual(FACE_COUNT);
-    // 「1 (0.20, 0.61)」のような形
-    expect(svg).toMatch(/1 \(-?[\d.]+, -?[\d.]+\)/);
+    expect(lists).toHaveLength(FACE_COUNT * observed.length);
+  });
+
+  it('各行に平面と空間それぞれの近い色を 3 つ出す', () => {
+    const svg = buildColorSpaceSvg(DEFAULT_PALETTE, observed, { x: 0, y: 0 });
+
+    // 「1 (0.20, 0.61)   面: 赤 茶 紫   空間: 赤 橙 茶」のような形
+    expect(svg).toMatch(/1 \(-?[\d.]+, -?[\d.]+\) {3}面: \S+ \S+ \S+ {3}空間: \S+ \S+ \S+/);
+  });
+
+  it('近い色は距離の順に並ぶ（赤なら先頭が赤）', () => {
+    // Arrange: 基準色の赤そのもの
+    const red = DEFAULT_PALETTE.colors.red;
+
+    // Act
+    const svg = buildColorSpaceSvg(DEFAULT_PALETTE, [red], { x: 0, y: 0 });
+
+    // Assert
+    expect(svg).toMatch(/面: 赤 /);
+    expect(svg).toMatch(/空間: 赤 /);
   });
 
   it('バンドが 1 本も無くても壊れない', () => {
@@ -84,16 +98,36 @@ describe('buildColorSpaceSvg', () => {
   });
 
   it('指定した位置に描く（パネルの大きさに収まる）', () => {
-    // Arrange / Act
-    const svg = buildColorSpaceSvg(DEFAULT_PALETTE, observed, { x: 100, y: 500 });
+    // Arrange
+    const size = colorSpacePanelSize(observed.length, 800);
+
+    // Act
+    const svg = buildColorSpaceSvg(DEFAULT_PALETTE, observed, { x: 100, y: 500, width: 800 });
 
     // Assert
     const ys = [...svg.matchAll(/\sy[12]?="(-?[\d.]+)"/g)].map((m) => Number(m[1]));
     expect(Math.min(...ys)).toBeGreaterThanOrEqual(500);
-    expect(Math.max(...ys)).toBeLessThanOrEqual(500 + COLOR_SPACE_PANEL_HEIGHT);
+    expect(Math.max(...ys)).toBeLessThanOrEqual(500 + size.height);
 
     const xs = [...svg.matchAll(/\sx[12]?="(-?[\d.]+)"/g)].map((m) => Number(m[1]));
     expect(Math.min(...xs)).toBeGreaterThanOrEqual(100);
-    expect(Math.max(...xs)).toBeLessThanOrEqual(100 + COLOR_SPACE_PANEL_WIDTH);
+    expect(Math.max(...xs)).toBeLessThanOrEqual(100 + size.width);
+  });
+
+  it('面の大きさは画像の幅に追従する（1 面が画像幅の半分ほど）', () => {
+    // Arrange / Act
+    const narrow = colorSpacePanelSize(3, 600);
+    const wide = colorSpacePanelSize(3, 1200);
+
+    // Assert: 広い画像ほど面も大きく、パネルは画像に収まる
+    expect(wide.width).toBeGreaterThan(narrow.width);
+    expect(wide.width).toBeLessThanOrEqual(1200);
+  });
+
+  it('バンドが多いほど縦に伸びる（1 行 1 バンドのため）', () => {
+    const few = colorSpacePanelSize(2, 800);
+    const many = colorSpacePanelSize(6, 800);
+
+    expect(many.height).toBeGreaterThan(few.height);
   });
 });

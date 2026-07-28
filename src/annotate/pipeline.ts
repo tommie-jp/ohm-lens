@@ -8,8 +8,13 @@ import { formatConfidence, formatOhms, isReportable } from '../core/format.js';
 import { jointReadResistor } from '../core/value/jointDecode.js';
 import { DEFAULT_PALETTE, type Palette } from '../core/color/palette.js';
 import type { RoiImage } from '../core/bands/profile.js';
-import { buildAnnotationSvg, panelHeightFor } from './render.js';
-import { COLOR_SPACE_PANEL_WIDTH } from './colorSpace.js';
+import {
+  buildAnnotationSvg,
+  labelOverflow,
+  panelHeightFor,
+  panelWidthFor,
+  type AnnotateInput,
+} from './render.js';
 
 /**
  * 1 枚の写真を検出・解析し、結果を焼き込んだ画像を返す。
@@ -80,8 +85,8 @@ export async function annotateImage(
     options.expectedOhms === undefined ? '期待 不明' : `期待 ${formatOhms(options.expectedOhms)}`;
 
   if (located === null) {
-    const input = {
-      width: canvasWidth(image.width),
+    const input: AnnotateInput = {
+      width: canvasWidth(image, 0),
       height: image.height,
       box: null,
       bands: [],
@@ -91,7 +96,7 @@ export async function annotateImage(
       ...(options.japanese === undefined ? {} : { japanese: options.japanese }),
     };
     return {
-      jpeg: await composite(image, buildAnnotationSvg(input), panelHeightFor(input)),
+      jpeg: await composite(image, input),
       caption: `${label} | ${expected} | 検出失敗`,
       located: false,
       ohms: null,
@@ -127,21 +132,25 @@ export async function annotateImage(
     `${box.angleDeg.toFixed(0)}° L${Math.round(box.length)} T${Math.round(box.thickness)} ` +
     `(比 ${(box.length / box.thickness).toFixed(2)}) | ${bandSummary}`;
 
-  const input = {
-    width: canvasWidth(image.width),
+  const colorSpace = { palette, observed: result.runs.map((run) => run.lab) };
+  const base: AnnotateInput = {
+    width: canvasWidth(image, colorSpace.observed.length),
     height: image.height,
     box,
     bands: result.bands,
     rectify: ROI_OPTIONS,
     caption,
     // 実測色は分類前のランの Lab（基準色にどう引き寄せられたかを見るため）
-    colorSpace: { palette, observed: result.runs.map((run) => run.lab) },
+    colorSpace,
     ...(joint === null ? {} : { usedRuns: joint.usedRuns, droppedRuns: joint.droppedRuns }),
     ...(options.japanese === undefined ? {} : { japanese: options.japanese }),
   };
+  // 注釈が写真からはみ出す量を測ってから、その分キャンバスを広げる
+  const overflow = labelOverflow(base);
+  const input: AnnotateInput = { ...base, labelOverflow: overflow };
 
   return {
-    jpeg: await composite(image, buildAnnotationSvg(input), panelHeightFor(input)),
+    jpeg: await composite(image, input),
     caption,
     located: true,
     ohms,
@@ -151,29 +160,34 @@ export async function annotateImage(
 }
 
 /**
- * 元画像に SVG を焼き込む。色空間パネルのぶんだけキャンバスを広げてから重ねる。
- * 写真の上に重ねると抵抗器が隠れるので、下と（狭ければ）右に場所を作る。
+ * 元画像に SVG を焼き込む。注釈と色空間パネルのぶんキャンバスを広げてから重ねる。
+ *
+ * 写真の上に重ねると抵抗器が隠れるので下と右に場所を作る。注釈が写真の外へ
+ * はみ出す量も足しておかないと、色空間パネルの上に文字が重なる。
  */
-async function composite(image: RoiImage, svg: string, panelHeight: number): Promise<Buffer> {
+async function composite(image: RoiImage, input: AnnotateInput): Promise<Buffer> {
   const base = sharp(Buffer.from(image.data), {
     raw: { width: image.width, height: image.height, channels: 4 },
   });
-  if (panelHeight === 0) {
-    return base.composite([{ input: Buffer.from(svg), top: 0, left: 0 }]).jpeg({ quality: 88 }).toBuffer();
+
+  const overflow = input.labelOverflow ?? { right: 0, bottom: 0 };
+  const bottom = overflow.bottom + panelHeightFor(input, input.width);
+  const right = Math.max(input.width - image.width, overflow.right);
+  if (bottom === 0 && right <= 0) {
+    return base
+      .composite([{ input: Buffer.from(buildAnnotationSvg(input)), top: 0, left: 0 }])
+      .jpeg({ quality: 88 })
+      .toBuffer();
   }
 
   return base
-    .extend({
-      bottom: panelHeight,
-      right: Math.max(0, canvasWidth(image.width) - image.width),
-      background: '#ffffff',
-    })
-    .composite([{ input: Buffer.from(svg), top: 0, left: 0 }])
+    .extend({ bottom, right: Math.max(0, right), background: '#ffffff' })
+    .composite([{ input: Buffer.from(buildAnnotationSvg(input)), top: 0, left: 0 }])
     .jpeg({ quality: 88 })
     .toBuffer();
 }
 
 /** 色空間パネルが収まるキャンバス幅。小さい写真では写真より広くなる。 */
-function canvasWidth(imageWidth: number): number {
-  return Math.max(imageWidth, COLOR_SPACE_PANEL_WIDTH);
+function canvasWidth(image: RoiImage, bandCount: number): number {
+  return Math.max(image.width, panelWidthFor(bandCount));
 }

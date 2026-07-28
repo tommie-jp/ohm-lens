@@ -161,31 +161,38 @@ export function bandCorners(
 export type LabelSide = 'roiTop' | 'roiBottom';
 
 /**
+ * 注釈を積んでいく向き（元画像の座標系）。
+ *
+ * **水平な抵抗器なら真下、垂直なら真右**。法線方向（長軸に垂直）へ出すと、
+ * 傾いた抵抗器では斜めに流れて番号と色名が縦に揃わない。画像の軸に固定すれば、
+ * 番号の直下（右横）に識別結果が並んで読みやすい。
+ */
+export function labelDirection(box: OrientedBox): Point {
+  const rad = (box.angleDeg * Math.PI) / 180;
+  return Math.abs(Math.cos(rad)) >= Math.abs(Math.sin(rad)) ? { x: 0, y: 1 } : { x: 1, y: 0 };
+}
+
+/**
  * 注釈を出す側を決める。
  *
- * **水平な抵抗器なら下、垂直なら右**に出す。文字が抵抗器の上に重なると
- * 色帯が見えなくなるので外へ出すが、上や左に出すと画像の縁に切れやすく、
- * 何より並びが読みにくい。
+ * 文字が抵抗器の上に重なると色帯が見えなくなるので外へ出す。
+ * {@link labelDirection} と同じ向きにある縁を選ぶ。
  */
 export function labelSide(box: OrientedBox): LabelSide {
   const rad = (box.angleDeg * Math.PI) / 180;
-  const cos = Math.cos(rad);
-  const sin = Math.sin(rad);
-
   // ROI の y=height 側へ出る向き（roiToImage の across 成分と同じ）
-  const toBottom = { x: -sin, y: cos };
-  // 水平なら「下」（+y）、垂直なら「右」（+x）に近いほうを選ぶ
-  const wanted = Math.abs(cos) >= Math.abs(sin) ? { x: 0, y: 1 } : { x: 1, y: 0 };
+  const toBottom = { x: -Math.sin(rad), y: Math.cos(rad) };
+  const wanted = labelDirection(box);
   const alignment = toBottom.x * wanted.x + toBottom.y * wanted.y;
 
   return alignment >= 0 ? 'roiBottom' : 'roiTop';
 }
 
 /**
- * バンドの色名ラベルを置く位置（元画像座標）。
+ * バンドの注釈を置く位置（元画像座標）。
  *
- * バンド中心から短軸の外側（法線方向）へ `offset` px ずらす。
- * 抵抗器の上に文字が重なって色帯が見えなくなるのを避けるため。
+ * バンドの縁から {@link labelDirection} の向きへ `offset` px ずらす。
+ * 同じバンドの番号・色名・意味は offset だけを変えて縦（横）に積める。
  *
  * @param offset 箱の縁からの距離 [px]（元画像スケール）
  * @param side どちらの縁から出すか（{@link labelSide} で決める）
@@ -195,16 +202,17 @@ export function labelAnchor(
   options: RectifyOptions,
   band: ColumnRange,
   offset: number,
-  side: LabelSide = 'roiTop',
+  side: LabelSide,
 ): Point {
   const geometry = roiGeometry(box, options);
   const centerColumn = (band.start + band.end) / 2;
-  const toBottom = side === 'roiBottom';
-
-  const onEdge = roiToImage(box, options, centerColumn, toBottom ? geometry.height : 0);
-  const direction = toBottom
-    ? { x: -geometry.sin, y: geometry.cos }
-    : { x: geometry.sin, y: -geometry.cos };
-
+  const onEdge = roiToImage(
+    box,
+    options,
+    centerColumn,
+    side === 'roiBottom' ? geometry.height : 0,
+  );
+  // labelSide が「その向きにある縁」を選んでいるので、そのまま外へ伸ばせばよい
+  const direction = labelDirection(box);
   return { x: onEdge.x + offset * direction.x, y: onEdge.y + offset * direction.y };
 }

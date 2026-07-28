@@ -119,7 +119,7 @@ export function drawBandLabels(
     context.fillStyle = BOX_COLOR;
     context.fillText(String(index + 1), numberAt.x, numberAt.y);
 
-    // ラベル: 詰まって重なるので 1 本ごとに段違いにする
+    // ラベル: 番号の直下（右横）。詰まって重なるので 1 本ごとに段違いにする
     const stagger = index % 2 === 0 ? 0 : fontPx * 1.15;
     const anchor = labelAnchor(box, options.rectify, band, baseOffset + stagger + fontPx * 0.8, side);
     const text = (options.japanese ?? true) ? BAND_COLOR_JA[band.color] : band.color;

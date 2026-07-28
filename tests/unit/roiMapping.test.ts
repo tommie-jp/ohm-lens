@@ -172,29 +172,23 @@ describe('bandCorners', () => {
 });
 
 describe('labelAnchor', () => {
-  it('バンド中心から短軸の外側にずれた位置を返す', () => {
+  it('バンド中心から箱の外側へ出る', () => {
     // Arrange / Act
-    const anchor = labelAnchor(BOX, {}, { start: 10, end: 30 }, 20);
+    const anchor = labelAnchor(BOX, {}, { start: 10, end: 30 }, 20, labelSide(BOX));
 
-    // Assert: 角度 0 なので上方向（Y が小さい側）へ出る
-    expect(anchor.y).toBeLessThan(BOX.centerY);
+    // Assert: 角度 0 なので下方向（Y が大きい側）へ出る
+    expect(anchor.y).toBeGreaterThan(BOX.centerY);
     expect(anchor.x).toBeCloseTo(roiToImage(BOX, {}, 20, 0).x, 6);
   });
 
-  it('オフセットを大きくするとさらに離れる', () => {
-    const near = labelAnchor(BOX, {}, { start: 10, end: 30 }, 10);
-    const far = labelAnchor(BOX, {}, { start: 10, end: 30 }, 40);
-
-    expect(far.y).toBeLessThan(near.y);
-  });
-
-  it('傾いた箱では法線方向にずれる（基準は箱の縁）', () => {
+  it('傾いた箱でも基準は箱の縁（中心線ではない）', () => {
     // Arrange / Act
-    const anchor = labelAnchor(TILTED, {}, { start: 10, end: 30 }, 30);
-    // 縁（ROI の y=0）が基準。中心線ではない
-    const onEdge = roiToImage(TILTED, {}, 20, 0);
+    const side = labelSide(TILTED);
+    const anchor = labelAnchor(TILTED, {}, { start: 10, end: 30 }, 30, side);
+    const { height } = roiGeometry(TILTED, {});
+    const onEdge = roiToImage(TILTED, {}, 20, side === 'roiBottom' ? height : 0);
 
-    // Assert: 法線方向にちょうど offset ぶん離れている
+    // Assert: 縁からちょうど offset ぶん離れている
     expect(Math.hypot(anchor.x - onEdge.x, anchor.y - onEdge.y)).toBeCloseTo(30, 6);
   });
 });
@@ -253,6 +247,34 @@ describe('bodyColumns', () => {
 });
 
 describe('labelSide / labelAnchor — 注釈を出す向き', () => {
+  it('水平な抵抗器では真下へ伸びる（斜めにしない）', () => {
+    // Arrange: 25 度傾いた抵抗器。法線方向だと斜めに流れてしまう
+    const tilted: OrientedBox = { ...BOX, angleDeg: 25 };
+    const side = labelSide(tilted);
+
+    // Act
+    const near = labelAnchor(tilted, {}, { start: 10, end: 30 }, 10, side);
+    const far = labelAnchor(tilted, {}, { start: 10, end: 30 }, 40, side);
+
+    // Assert: x は動かず y だけ増える（番号の直下に色名が来る）
+    expect(far.x).toBeCloseTo(near.x, 6);
+    expect(far.y - near.y).toBeCloseTo(30, 6);
+  });
+
+  it('垂直な抵抗器では真右へ伸びる', () => {
+    // Arrange
+    const tilted: OrientedBox = { ...BOX, angleDeg: 70 };
+    const side = labelSide(tilted);
+
+    // Act
+    const near = labelAnchor(tilted, {}, { start: 10, end: 30 }, 10, side);
+    const far = labelAnchor(tilted, {}, { start: 10, end: 30 }, 40, side);
+
+    // Assert
+    expect(far.y).toBeCloseTo(near.y, 6);
+    expect(far.x - near.x).toBeCloseTo(30, 6);
+  });
+
   it('水平な抵抗器では下側', () => {
     // Arrange / Act
     const side = labelSide(BOX);
