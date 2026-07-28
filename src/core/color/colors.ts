@@ -39,6 +39,11 @@ export const BAND_SRGB: Record<BandColor, Srgb255> = {
 export const BODY_SRGB: Record<BodyColor, Srgb255> = {
   beige: [210, 180, 140],
   lightblue: [168, 200, 216],
+  // セメント抵抗に多い灰白。beige と lightblue しか無いと無彩色のボディが
+  // 無理にどちらかへ寄せられ、b* が ±18 動く（03-1.6ohm）
+  greywhite: [200, 200, 196],
+  // 金属皮膜・精密抵抗に多いオリーブ。灰白に寄せると誤読になる（21-2.26kohm）
+  olive: [150, 152, 120],
 };
 
 function toLabTable<K extends string>(table: Record<K, Srgb255>): Record<K, LabColor> {

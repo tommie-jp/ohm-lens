@@ -19,7 +19,7 @@ export type BandColor =
   | 'silver';
 
 /** 抵抗器の本体色。バンドではなく背景として扱う。 */
-export type BodyColor = 'beige' | 'lightblue';
+export type BodyColor = 'beige' | 'lightblue' | 'greywhite' | 'olive';
 
 /** CIELAB (D65) の色。culori の Lab オブジェクトと相互変換する。 */
 export interface LabColor {

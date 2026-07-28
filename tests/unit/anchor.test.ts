@@ -68,3 +68,41 @@ describe('estimateBodyAnchor', () => {
     expect(estimateBodyAnchor([])).toBeNull();
   });
 });
+
+/**
+ * 灰白のボディ。
+ *
+ * `BODY_SRGB` が beige と lightblue しか持たないと、セメント抵抗や
+ * 精密抵抗のような**灰白ボディ**が無理にどちらかへ寄せられる。
+ * 39 枚では `03`（a1 b6）と `21`（a-10 b10）がこれに当たり、
+ * beige に寄せられて b\* に +18 が加算されていた。
+ */
+describe('nearestBodyReference — 灰白ボディ', () => {
+  it('ほぼ無彩色のボディは beige にも lightblue にも寄せない', () => {
+    // Arrange: 03-1.6ohm の実測アンカー
+    const greyish = { l: 45, a: 1, b: 6 };
+
+    // Act
+    const reference = nearestBodyReference(greyish);
+
+    // Assert
+    expect(reference).not.toStrictEqual(BEIGE);
+    expect(reference).not.toStrictEqual(LIGHTBLUE);
+  });
+
+  it('わずかに青緑寄りの無彩色ボディも灰白として扱う', () => {
+    // Arrange: 21-2.26kohm の実測アンカー
+    expect(nearestBodyReference({ l: 61, a: -10, b: 10 })).not.toStrictEqual(BEIGE);
+  });
+
+  it('青ボディは灰白に取られず lightblue のまま', () => {
+    // Arrange: 39（a-7 b-5）と 23（a-5 b-7）。彩度は低いが青寄り
+    expect(nearestBodyReference({ l: 20, a: -7, b: -5 })).toStrictEqual(LIGHTBLUE);
+    expect(nearestBodyReference({ l: 26, a: -5, b: -7 })).toStrictEqual(LIGHTBLUE);
+  });
+
+  it('黄み寄りのベージュボディは灰白に取られない', () => {
+    // Arrange: 35-1Mohm（a0 b25）。a\* は 0 だが b\* が高い
+    expect(nearestBodyReference({ l: 44, a: 0, b: 25 })).toStrictEqual(BEIGE);
+  });
+});

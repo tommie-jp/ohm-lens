@@ -8,8 +8,16 @@ describe('基準色テーブル', () => {
     expect(Object.keys(BAND_REFERENCE_COLORS)).toHaveLength(12);
   });
 
-  it('本体色が 2 色定義されている', () => {
-    expect(Object.keys(BODY_REFERENCE_COLORS)).toHaveLength(2);
+  it('本体色に beige / lightblue / greywhite / olive が定義されている', () => {
+    // 実物のボディはこの 4 系統に分かれる（炭素皮膜・金属皮膜・セメント・
+    // 金属酸化皮膜）。足りないと無彩色のボディが無理に beige へ寄せられ、
+    // 色順応補正が b* を ±18 動かして青バンドを灰に潰す
+    expect(Object.keys(BODY_REFERENCE_COLORS).sort()).toStrictEqual([
+      'beige',
+      'greywhite',
+      'lightblue',
+      'olive',
+    ]);
   });
 
   it('基準色はすべて有限の Lab 値', () => {
