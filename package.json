@@ -12,6 +12,7 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "coverage": "vitest run --coverage",
+    "recalibrate": "vitest run calibrate && vitest run samples && vitest run diagnose",
     "lint": "eslint .",
     "typecheck": "tsc --noEmit",
     "lint:md": "markdownlint \"**/*.md\""
