@@ -351,15 +351,17 @@ function buildProfileChartSvg(input: AnnotateInput, left: number, top: number): 
   }
 
   // ラン境界（本数判定の理由が見えるように）
-  for (const run of chart.runs) {
+  const dropped = new Set(input.droppedRuns ?? []);
+  chart.runs.forEach((run, index) => {
+    const isDropped = dropped.has(index);
     for (const edge of [run.start, run.end]) {
       parts.push(
         `<line x1="${toX(edge).toFixed(1)}" y1="${plotTop.toFixed(1)}" ` +
           `x2="${toX(edge).toFixed(1)}" y2="${(plotTop + plotHeight).toFixed(1)}" ` +
-          `stroke="rgba(255,59,48,0.55)" stroke-width="1" />`,
+          `stroke="rgba(255,59,48,${isDropped ? 0.28 : 0.55})" stroke-width="1" />`,
       );
     }
-  }
+  });
 
   // 3 系列
   for (const series of CHART_SERIES) {
@@ -371,6 +373,22 @@ function buildProfileChartSvg(input: AnnotateInput, left: number, top: number): 
         `stroke-width="1.5" stroke-linejoin="round" />`,
     );
   }
+
+  // ランの通し番号。写真に焼いた番号・一覧表の番号と対応する。
+  // 折れ線より後に描いて線に隠れないようにする
+  chart.runs.forEach((run, index) => {
+    const center = toX((run.start + run.end) / 2);
+    parts.push(
+      textElement(
+        center,
+        plotTop + CHART.fontPx,
+        String(index + 1),
+        CHART.fontPx + 1,
+        BOX_COLOR,
+        dropped.has(index) ? 0.45 : 1,
+      ),
+    );
+  });
 
   // 目盛り（上端・下端・0）と凡例
   const tick = (value: number): string =>

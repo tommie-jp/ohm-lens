@@ -177,4 +177,32 @@ describe('中心線プロファイルのグラフ', () => {
     expect(svg).not.toContain('<polyline');
     expect(svg).toContain('>茶<');
   });
+
+  it('ランの通し番号をグラフにも重ねる（写真・表と同じ番号）', () => {
+    // Arrange: 番号は 写真 + 表 + グラフ の 3 か所に出る
+    const withChart = buildAnnotationSvg(inputOf({ width: 800, profile: profileOf(40) }));
+    const withoutChart = buildAnnotationSvg(inputOf({ width: 800 }));
+
+    // Act
+    const countIn = (svg: string): number => svg.split('>1<').length - 1;
+
+    // Assert
+    expect(countIn(withoutChart)).toBe(2);
+    expect(countIn(withChart)).toBe(3);
+  });
+
+  it('除外されたランはグラフ上でも薄くする', () => {
+    // Arrange
+    const svg = buildAnnotationSvg(
+      inputOf({
+        width: 800,
+        profile: profileOf(40),
+        usedRuns: [{ runIndex: 0, color: 'red', role: 'digit', roleText: '2' }],
+        droppedRuns: [1],
+      }),
+    );
+
+    // Assert: 薄い番号（opacity 0.45）が描かれている
+    expect(svg).toContain('opacity="0.45"');
+  });
 });
