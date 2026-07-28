@@ -293,6 +293,7 @@ getUserMedia
 | [docs/08-GitHub-Pages公開.md](docs/08-GitHub-Pages公開.md) | GitHub Pages での公開（相対 base・パレット同期・カスタムドメイン移行） |
 | [docs/04-色判定方式の検討.md](docs/04-色判定方式の検討.md) | 色判定方式の検討（RGB 距離・指標多数決の不採用理由、E系列候補照合の提案） |
 | [docs/09-色空間と色差指標の検討.md](docs/09-色空間と色差指標の検討.md) | 色空間と色差指標の検討（HyAB・OKLab の実測比較、ΔE2000 据え置きの根拠、飽和ガードと L クランプの否定） |
+| [docs/11-金銀バンドが読めない理由.md](docs/11-金銀バンドが読めない理由.md) | 金・銀が読めない原因の切り分け（ラメ・解像度・基準色はいずれも原因ではない） |
 | `diagrams/` | ブロック図・状態遷移図（PlantUML ソースと生成 PNG） |
 | [CHANGELOG.md](CHANGELOG.md) | 変更履歴 |
 
