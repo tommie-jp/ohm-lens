@@ -41,12 +41,38 @@ export interface UsedRun {
   readonly roleText: string;
 }
 
+/**
+ * 確信度の内訳。**調査用**で、値の決定には使わない。
+ *
+ * 確信度が低い理由が「色が基準色から遠い（absolute）」のか
+ * 「次点の解釈と僅差（margin）」のか「金属色を数字に読み替えた
+ * （plausibility）」のかを切り分けられないと、式を直しようがない。
+ */
+export interface ConfidenceBreakdown {
+  /** 採用した解釈のバンド 1 本あたり平均 ΔE */
+  readonly meanDeltaE: number;
+  /** 色としての絶対的な近さ 0..1 */
+  readonly absolute: number;
+  /** 次点の解釈との差 0..1 */
+  readonly margin: number;
+  /** 金属色を数字として読み替えたことによる減点 0..1 */
+  readonly plausibility: number;
+  /** 次点との素のコスト差。次点が無ければ null */
+  readonly runnerUpGap: number | null;
+  /** 次点の解釈が指す抵抗値。次点が無ければ null */
+  readonly runnerUpOhms: number | null;
+  /** 次点が採用と**同じ値**を指しているか。同値なら僅差でも迷っていない */
+  readonly runnerUpSameValue: boolean;
+}
+
 /** 同時デコードの結果。値に加えて「どう解釈したか」を持つ。 */
 export interface JointReading extends ResistorReading {
   /** 採用したランと役割（runIndex の昇順） */
   readonly usedRuns: readonly UsedRun[];
   /** ノイズとして捨てたランの添字 */
   readonly droppedRuns: readonly number[];
+  /** 確信度の内訳（調査用） */
+  readonly breakdown: ConfidenceBreakdown;
 }
 
 /** 解析済みのラン。分類前の色（Lab）を持つ。 */
@@ -351,6 +377,17 @@ export function jointReadResistor(
     series: chosen.decoded.series,
     direction: chosen.direction,
     confidence,
+    breakdown: {
+      meanDeltaE: chosen.meanDeltaE,
+      absolute,
+      margin,
+      plausibility,
+      runnerUpGap: runnerUp === null ? null : runnerUp.cost - chosen.cost,
+      runnerUpOhms: runnerUp === null ? null : runnerUp.decoded.ohms,
+      runnerUpSameValue:
+        runnerUp !== null &&
+        Math.abs(runnerUp.decoded.ohms - chosen.decoded.ohms) / chosen.decoded.ohms < 1e-6,
+    },
     usedRuns,
     droppedRuns,
   };
