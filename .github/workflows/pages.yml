@@ -1,0 +1,57 @@
+name: Deploy to GitHub Pages
+
+# main への push で公開する。手元から流したいときは workflow_dispatch。
+# 実際の運用は ./doDeploy.sh がこのワークフローを起動して見届ける。
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# 同時に複数のデプロイが走ると、後から始まった古いビルドが新しい成果物を
+# 上書きしうる。順番に流す（実行中のものは打ち切らない）。
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 22
+          cache: npm
+
+      - run: npm ci
+
+      - name: Build
+        run: npm run build
+
+      # vite.config.ts の base が '/' に戻ると、プロジェクトページ（/ohm-lens/
+      # 配下）で最初のスクリプト読み込みから壊れる。公開前に気づけるようにする。
+      - name: Assert relative asset paths
+        run: |
+          if grep -qE '(src|href)="/' dist/index.html; then
+            echo '::error::dist/index.html に絶対パスの参照があります。vite.config.ts の base を確認してください。'
+            grep -nE '(src|href)="/' dist/index.html
+            exit 1
+          fi
+
+      - uses: actions/configure-pages@v6
+
+      - uses: actions/upload-pages-artifact@v5
+        with:
+          path: dist
+
+      - id: deployment
+        uses: actions/deploy-pages@v5

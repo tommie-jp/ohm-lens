@@ -34,6 +34,10 @@ function servePalette(): Plugin {
 export default defineConfig({
   root: 'src/debug',
   plugins: [servePalette()],
+  // 相対パスで出力する。GitHub Pages のプロジェクトページ（/ohm-lens/ 配下）と
+  // カスタムドメイン（直下）のどちらでも、同じ成果物がそのまま動くようにするため。
+  // 絶対パスにすると配信先を変えるたびにビルド設定を触ることになる。
+  base: './',
   server: {
     // tailscale serve 経由だと Host ヘッダが <machine>.<tailnet>.ts.net になる。
     // Vite は既定で未知の Host を弾くので、tailnet のドメインを許可しておく

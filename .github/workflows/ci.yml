@@ -32,3 +32,7 @@ jobs:
 
       - name: Test with coverage
         run: npm run coverage
+
+      # 公開は main への push で自動的に走るので、壊れたビルドは PR で止める。
+      - name: Build
+        run: npm run build

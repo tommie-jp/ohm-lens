@@ -372,10 +372,17 @@ function saveCurrentLabel(): void {
   renderLabelJson();
 }
 
-/** 学習済みパレットを読み込む。dev サーバーが sample/palette.json を配信する。 */
+/**
+ * 学習済みパレットを読み込む。
+ *
+ * dev では vite.config.ts のプラグインが隣の作業用リポジトリの
+ * sample/palette.json を配信し、本番では public/ に置いたコピーが配信される。
+ * パスを相対にしているのは、GitHub Pages のプロジェクトページのように
+ * サブパス配下に置かれても引けるようにするため。
+ */
 async function loadPaletteFromServer(): Promise<void> {
   try {
-    const response = await fetch('/palette.json');
+    const response = await fetch('./palette.json');
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
     const parsed = (await response.json()) as { colors?: Record<string, LabColor> };
     const colors = parsed.colors ?? {};

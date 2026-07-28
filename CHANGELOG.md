@@ -4,6 +4,22 @@
 
 ## [Unreleased]
 
+### GitHub Pages で公開できるようにした（doDeploy.sh）
+
+- `./doDeploy.sh` を追加。検証 → パレット同期 → push → Actions の完了確認 →
+  公開 URL の応答確認までを一本にまとめた。`--dry-run` で push 前に止められる
+- ビルドとアップロードは GitHub Actions（`.github/workflows/pages.yml`）が行う。
+  `dist/` は `.gitignore` 済みなので `gh-pages` ブランチは作らない
+- Vite の `base` を **`'./'`（相対）** にした。既定の絶対パスだと
+  プロジェクトページ（`/ohm-lens/` 配下）で最初のスクリプト読み込みから壊れる。
+  相対にしておけばカスタムドメインへ移す際もビルド設定を触らずに済む
+  - 巻き戻りに公開後まで気づけないので、`dist/index.html` に絶対パス参照が
+    無いことを doDeploy.sh と pages.yml の両方で検査する
+- 学習パレットを `src/debug/public/palette.json` に置き、公開版でも較正済みの
+  基準色が効くようにした。非公開リポジトリ側との同期は doDeploy.sh が行う
+- `fetch('/palette.json')` を `'./palette.json'` に変更（サブパス配下対策）
+- CI にも `npm run build` を追加。これまで build は CI で一度も走っていなかった
+
 ### カラーコードに通し番号を振り、色空間の印を文字に変える
 
 - カラーコードに **1 から通し番号**を振り、バンドのすぐ外側に焼き込む

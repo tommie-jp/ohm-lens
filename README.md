@@ -4,7 +4,8 @@ Web カメラに映した抵抗器の抵抗値を、リアルタイムで映像�
 
 Author: [tommie.jp](https://tommie.jp) ([@tommie-jp](https://github.com/tommie-jp))
 
-- **当面の URL**: `https://ohmlens.tommie.jp`
+- **公開先**: [tommie-jp.github.io/ohm-lens](https://tommie-jp.github.io/ohm-lens/)
+  （将来 `https://ohmlens.tommie.jp` へ移行予定）
 - **方針**: ブラウザ完結（クライアントサイド推論）、サーバ不要
 - **Status**: Phase 0 実装中（Step 0-1〜0-6 完了、実画像での較正 Step 0-7 が残り。
   サンプル 39 枚で検出 39/39・値の一致 30/39、実機での見え方は正解 28・誤答 1・保留 10）
@@ -48,6 +49,46 @@ VITE_PORT=5174 ./doStart.sh   # ローカル側のポートを変える場合
 - 既に使われている `tailscale serve` のポートは奪わない（起動前に確認する）
 - Ctrl+C で、このスクリプトが張った分**だけ**を取り消す。他の serve 設定は残す
 - Vite はプロセスグループごと停止する（`npm run dev` の孫プロセスが残らないよう）
+
+## 公開する（doDeploy.sh）
+
+```bash
+./doDeploy.sh             # 検証 → push → Actions を見届けて公開 URL を確認
+./doDeploy.sh --dry-run   # push せず、検証とパレット差分の確認だけ
+```
+
+ビルドとアップロードは GitHub Actions
+（[.github/workflows/pages.yml](.github/workflows/pages.yml)）が行います。
+`doDeploy.sh` はその前後を引き受けるラッパーです。
+
+1. 公開してよい状態か確かめる（`main` にいるか・作業ツリーが clean か・
+   Pages の配信元が GitHub Actions になっているか）
+2. 非公開の作業用リポジトリにある `sample/palette.json` を
+   `src/debug/public/palette.json` へ同期する（差分があれば単独でコミット）
+3. 手元で typecheck / lint / test / build を通す。**通らなければ push しない**
+4. push して Actions の完了を待ち、公開 URL と `palette.json` の応答を確かめる
+
+| オプション | 効果 |
+| ------------ | ------ |
+| `--dry-run` | push の直前まで実行して止まる |
+| `--skip-checks` | typecheck / lint / test を飛ばす（build は飛ばさない） |
+| `--no-watch` | push したら Actions の完了を待たない |
+| `--no-palette` | パレットの同期を行わない |
+
+スクリプトの約束:
+
+- 勝手に `stash` / `commit --all` / force push をしない。未コミットの変更が
+  あれば何もせず止まる
+- push が公開の引き金なので、押し戻せる最後の地点は「手元の検証を通ること」
+- パレットの取得元が無い環境（非公開リポジトリを clone していない）でも、
+  コミット済みのパレットで公開できる
+
+初回だけ、リポジトリの Settings → Pages → Source を **GitHub Actions** に
+設定しておく必要があります（未設定なら `doDeploy.sh` が push 前に止めます）。
+
+`base` を `'./'` にしてあるので、プロジェクトページ（`/ohm-lens/` 配下）でも
+カスタムドメイン（直下）でも同じ成果物が動きます。カスタムドメインへ移す際は
+`src/debug/public/CNAME` を追加し、`PAGES_URL` を変えます。
 
 ## 対応する画像形式
 
@@ -235,6 +276,7 @@ getUserMedia
 | [docs/05-doDetect計画.md](docs/05-doDetect計画.md) | doDetect.sh 計画（バッチ検出デバッグ、バンドの意味ラベル付き） |
 | [docs/06-検出精度の改善.md](docs/06-検出精度の改善.md) | 検出（赤い四角形）の精度改善（影の除外・開処理・成分の形での選択、実測値） |
 | [docs/07-色帯読み取りの改善.md](docs/07-色帯読み取りの改善.md) | 色帯読み取りの改善（本体範囲の事前情報化・陰影対策・金の誤学習ガード） |
+| [docs/08-GitHub-Pages公開.md](docs/08-GitHub-Pages公開.md) | GitHub Pages での公開（相対 base・パレット同期・カスタムドメイン移行） |
 | [docs/04-色判定方式の検討.md](docs/04-色判定方式の検討.md) | 色判定方式の検討（RGB 距離・指標多数決の不採用理由、E系列候補照合の提案） |
 | `diagrams/` | ブロック図・状態遷移図（PlantUML ソースと生成 PNG） |
 | [CHANGELOG.md](CHANGELOG.md) | 変更履歴 |
