@@ -9,6 +9,7 @@ import {
   buildAnnotationSvg,
   labelOverflow,
   panelHeightFor,
+  tableHeightFor,
   panelWidthFor,
   type AnnotateInput,
 } from './render.js';
@@ -146,7 +147,9 @@ async function composite(image: RoiImage, input: AnnotateInput): Promise<Buffer>
   });
 
   const overflow = input.labelOverflow ?? { right: 0, bottom: 0 };
-  const bottom = overflow.bottom + panelHeightFor(input, input.width);
+  // 下に伸ばす分 = 注釈のはみ出し + バンド一覧表 + 色空間パネル
+  const bottom =
+    overflow.bottom + tableHeightFor(input.bands.length) + panelHeightFor(input, input.width);
   const right = Math.max(input.width - image.width, overflow.right);
   if (bottom === 0 && right <= 0) {
     return base

@@ -35,14 +35,37 @@ function numberOffset(fontPx: number): number {
   return fontPx * 0.8;
 }
 
-/** 色名を置く距離。詰まって重なるので 1 本ごとに段違いにする。 */
-function nameOffset(fontPx: number, index: number): number {
-  return fontPx * 2.4 + (index % 2 === 0 ? 0 : fontPx * 2.4);
+/**
+ * バンドの一覧表の寸法。
+ *
+ * 以前は色名と意味をバンドのすぐ脇に置いていたが、バンドが詰まると重なるので
+ * 1 本ごとに段違いにする必要があり、それでも読みにくかった。写真の下に
+ * 表としてまとめる方が、番号との対応も追いやすい。
+ */
+const TABLE = {
+  /** 1 列の幅 */
+  columnWidth: 58,
+  /** 行の高さ */
+  rowHeight: 22,
+  /** 色玉の 1 辺 */
+  swatch: 16,
+  /** 表の外側の余白 */
+  padding: 10,
+  fontPx: 15,
+} as const;
+
+/** 表の行数（番号・色名・色玉・意味）。 */
+const TABLE_ROWS = 4;
+
+/** バンド一覧表の高さ [px]。バンドが無ければ 0。 */
+export function tableHeightFor(bandCount: number): number {
+  if (bandCount === 0) return 0;
+  return TABLE.rowHeight * TABLE_ROWS + TABLE.padding * 2;
 }
 
-/** 一番外側の行（意味）までの距離。 */
-function lastLineOffset(fontPx: number, index: number): number {
-  return nameOffset(fontPx, index) + fontPx * 1.15;
+/** バンド一覧表の幅 [px]。 */
+function tableWidthFor(bandCount: number): number {
+  return TABLE.columnWidth * bandCount + TABLE.padding * 2;
 }
 
 export interface AnnotateInput {
@@ -92,10 +115,11 @@ export function labelOverflow(input: AnnotateInput): LabelOverflow {
   let maxX = 0;
   let maxY = 0;
 
-  input.bands.forEach((band, index) => {
-    const at = labelAnchor(box, input.rectify, band, lastLineOffset(fontPx, index), side);
-    maxX = Math.max(maxX, at.x + fontPx * 2);
-    maxY = Math.max(maxY, at.y + fontPx);
+  // 写真に重ねるのは番号だけ。色名と意味は下の表に出す
+  input.bands.forEach((band) => {
+    const at = labelAnchor(box, input.rectify, band, numberOffset(fontPx), side);
+    maxX = Math.max(maxX, at.x + fontPx);
+    maxY = Math.max(maxY, at.y + fontPx * 0.5);
   });
 
   return {
@@ -162,6 +186,68 @@ function textElement(
   );
 }
 
+/**
+ * バンドの一覧表を描く。番号・色名・色玉・意味の 4 行。
+ *
+ * 番号は写真に焼いた番号と対応する。色玉を挟むのは、金/黄・灰/銀のような
+ * 取り違えを名前だけでなく目で確かめられるようにするため。
+ * 採用されなかったランは薄く描き、意味の欄に「除外」と出す。
+ */
+function buildBandTableSvg(
+  input: AnnotateInput,
+  nameOf: (color: Band['color']) => string,
+  top: number,
+): string {
+  if (input.bands.length === 0) return '';
+
+  const usedByIndex = new Map((input.usedRuns ?? []).map((used) => [used.runIndex, used]));
+  const dropped = new Set(input.droppedRuns ?? []);
+  const parts: string[] = [];
+
+  const width = tableWidthFor(input.bands.length);
+  const height = tableHeightFor(input.bands.length);
+  parts.push(
+    `<rect x="0.5" y="${(top + 0.5).toFixed(1)}" width="${width}" height="${height - 1}" ` +
+      `fill="#ffffff" stroke="rgba(0,0,0,0.25)" stroke-width="1" />`,
+  );
+
+  const rowY = (row: number): number =>
+    top + TABLE.padding + TABLE.rowHeight * row + TABLE.rowHeight * 0.72;
+
+  input.bands.forEach((band, index) => {
+    const used = usedByIndex.get(index);
+    const isDropped = dropped.has(index) || (input.usedRuns !== undefined && used === undefined);
+    const opacity = isDropped ? 0.45 : 1;
+    const cx = TABLE.padding + TABLE.columnWidth * index + TABLE.columnWidth / 2;
+
+    // 1 行目: 番号（写真の番号と対応）
+    parts.push(textElement(cx, rowY(0), String(index + 1), TABLE.fontPx, BOX_COLOR, opacity));
+    // 2 行目: 色名
+    parts.push(textElement(cx, rowY(1), nameOf(band.color), TABLE.fontPx, '#111', opacity));
+    // 3 行目: 色玉
+    const s = TABLE.swatch;
+    parts.push(
+      `<rect x="${(cx - s / 2).toFixed(1)}" y="${(rowY(2) - s * 0.78).toFixed(1)}" ` +
+        `width="${s}" height="${s}" fill="${bandColorCss(band.color)}" ` +
+        `stroke="rgba(0,0,0,0.55)" stroke-width="1" opacity="${opacity}" />`,
+    );
+    // 4 行目: カラーコード上の意味
+    const meaning = used === undefined ? (isDropped ? '除外' : '-') : used.roleText;
+    parts.push(
+      textElement(
+        cx,
+        rowY(3),
+        meaning,
+        Math.round(TABLE.fontPx * 0.9),
+        isDropped ? DROPPED_COLOR : '#0a4a7a',
+        opacity,
+      ),
+    );
+  });
+
+  return parts.join('');
+}
+
 /** 焼き込み用の SVG を返す。 */
 export function buildAnnotationSvg(input: AnnotateInput): string {
   const japanese = input.japanese ?? true;
@@ -201,31 +287,7 @@ export function buildAnnotationSvg(input: AnnotateInput): string {
         textElement(number.x, number.y, String(index + 1), fontPx, BOX_COLOR, opacity),
       );
 
-      // 色名と意味は番号の直下（右横）。詰まるので 1 本ごとに段違いにする
-      const anchor = labelAnchor(box, input.rectify, band, nameOffset(fontPx, index), side);
-
-      // 色玉（金/黄・灰/銀の取り違えを目で確かめられるように）
-      parts.push(
-        `<circle cx="${(anchor.x - fontPx * 1.5).toFixed(1)}" cy="${anchor.y.toFixed(1)}" ` +
-          `r="${(fontPx * 0.34).toFixed(1)}" fill="${bandColorCss(band.color)}" ` +
-          `stroke="rgba(0,0,0,0.55)" stroke-width="1" opacity="${opacity}" />`,
-      );
-
-      // 1 行目: 色名。2 行目: カラーコード上の意味（採用されたランのみ）
-      parts.push(textElement(anchor.x, anchor.y, nameOf(band.color), fontPx, '#111', opacity));
-      const meaning = used === undefined ? (isDropped ? '除外' : '') : used.roleText;
-      if (meaning !== '') {
-        parts.push(
-          textElement(
-            anchor.x,
-            anchor.y + fontPx * 1.15,
-            meaning,
-            Math.round(fontPx * 0.85),
-            isDropped ? DROPPED_COLOR : '#0a4a7a',
-            opacity,
-          ),
-        );
-      }
+      // 色名と意味は写真に重ねず、下の一覧表に出す（詰まると重なって読めないため）
     });
   }
 
@@ -235,7 +297,10 @@ export function buildAnnotationSvg(input: AnnotateInput): string {
       `${escapeXml(input.caption)}</text>`,
   );
 
-  const panelTop = input.height + (input.labelOverflow?.bottom ?? 0);
+  const tableTop = input.height + (input.labelOverflow?.bottom ?? 0);
+  parts.push(buildBandTableSvg(input, nameOf, tableTop));
+
+  const panelTop = tableTop + tableHeightFor(input.bands.length);
   const panelHeight = panelHeightFor(input, input.width);
   if (input.colorSpace !== undefined) {
     parts.push(
