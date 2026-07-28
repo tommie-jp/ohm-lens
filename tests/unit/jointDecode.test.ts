@@ -195,3 +195,60 @@ describe('jointReadResistor — 異常系', () => {
     expect(reading).not.toBeNull();
   });
 });
+
+describe('許容差バンドの間隔による方向の加点', () => {
+  /**
+   * IEC 60062 は許容差バンドを他より離して印刷する。実測でも 15-339ohm は
+   * 間隔が 3/3/4/14 と許容差の手前だけ 3.5 倍開く。
+   *
+   * ただし単独では当てにならない（`docs/07` で 14 枚中 4 枚しか合わず 4 枚は逆）。
+   * ここで担保するのは「効かせてはいけない場面で黙っていること」。
+   */
+  function runsWithGaps(colors: readonly BandColor[], gaps: readonly number[]): JointRun[] {
+    let x = 0;
+    return colors.map((color, index) => {
+      if (index > 0) x += gaps[index - 1] as number;
+      const run = { lab: labOf(color), start: x, end: x + 6 };
+      x += 6;
+      return run;
+    });
+  }
+
+  it('3 バンドの読みには効かせない（許容差バンドが無い）', () => {
+    // Arrange: 間隔が極端に偏っていても 3 バンドなら無視する
+    const even = runsWithGaps(['brown', 'black', 'red'], [4, 4]);
+    const skewed = runsWithGaps(['brown', 'black', 'red'], [1, 30]);
+
+    // Act
+    const a = jointReadResistor(even);
+    const b = jointReadResistor(skewed);
+
+    // Assert
+    expect(a?.ohms).toBe(b?.ohms);
+  });
+
+  it('間隔が均一なら読みを変えない', () => {
+    // Arrange
+    const colors: BandColor[] = ['brown', 'black', 'red', 'gold'];
+
+    // Act
+    const even = jointReadResistor(runsWithGaps(colors, [5, 5, 5]));
+    const alsoEven = jointReadResistor(runsWithGaps(colors, [6, 6, 6]));
+
+    // Assert
+    expect(even?.ohms).toBe(alsoEven?.ohms);
+    expect(even?.ohms).toBeCloseTo(1000, 6);
+  });
+
+  it('許容差の手前が離れている向きを妨げない', () => {
+    // Arrange: 許容差 gold が右端で、その手前だけ広い（IEC どおりの並び）
+    const runs = runsWithGaps(['brown', 'black', 'red', 'gold'], [3, 3, 14]);
+
+    // Act
+    const reading = jointReadResistor(runs);
+
+    // Assert
+    expect(reading?.ohms).toBeCloseTo(1000, 6);
+    expect(reading?.direction).toBe('ltr');
+  });
+});

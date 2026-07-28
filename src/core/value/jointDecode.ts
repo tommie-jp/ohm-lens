@@ -153,6 +153,25 @@ const CONFIDENCE_DELTA_CEILING = 40;
 /** 次点とのコスト差がこれだけ開いていれば「迷いなし」とみなす。 */
 const CONFIDENCE_MARGIN_SCALE = 4;
 
+/**
+ * 許容差バンドの手前の間隔による方向の加点。
+ *
+ * IEC 60062 では許容差バンドを他より離して印刷する。実測でも
+ * `15-339ohm` は間隔が 3 / 3 / 4 / **14** と、許容差の手前だけ 3.5 倍開く。
+ *
+ * ただし**単独では当てにならない**。`docs/07` では「許容差バンドの間隔で
+ * 方向を決める」を試して 14 枚中 4 枚しか合わず 4 枚は逆だった。実測でも
+ * 突出した間隔を持つ 4 枚のうち正しいのは 1 枚だけで、残りは検出の乱れ
+ * （欠損・過分割）による見かけの間隔だった。
+ *
+ * そこで**方向を決める根拠にはせず、コストの一項として弱く足す**。
+ * 色・E 系列・流通範囲の根拠が拮抗したときだけ効く。
+ */
+const SPACING_COST_SCALE = 1.5;
+
+/** 許容差の手前の間隔が他の中央値のこの倍率を超えたら「離れている」とみなす。 */
+const SPACING_DECISIVE_RATIO = 2;
+
 interface Candidate {
   readonly color: BandColor;
   readonly deltaE: number;
@@ -197,6 +216,47 @@ function rolesFor(colors: readonly BandColor[]): { role: BandRole; roleText: str
 /** 倍率を ×10 / ×0.01 のように読める形にする。 */
 function formatMultiplier(multiplier: number): string {
   return `×${multiplier >= 1 ? multiplier.toLocaleString('en-US') : String(multiplier)}`;
+}
+
+/**
+ * 許容差バンドが「離れて印刷されている」かどうかによる方向の加点。
+ *
+ * 読み取り方向の末尾（＝許容差バンド）の手前の間隔が、他の間隔の中央値より
+ * はっきり広ければ 0（加点なし）、逆側がはっきり広ければ罰を与える。
+ * どちらとも言えなければ 0。**判断できないときに黙って倒れる**ようにする。
+ */
+function spacingCost(
+  runs: readonly JointRun[],
+  keptIndices: readonly number[],
+  direction: ReadDirection,
+  bandCount: number,
+): number {
+  // 許容差バンドを持たない読み（3 バンド）には効かせない
+  if (bandCount < 4 || keptIndices.length < 4) return 0;
+
+  const gaps: number[] = [];
+  for (let i = 1; i < keptIndices.length; i += 1) {
+    const previous = runs[keptIndices[i - 1] as number] as JointRun;
+    const current = runs[keptIndices[i] as number] as JointRun;
+    gaps.push(Math.max(0, current.start - previous.end));
+  }
+  if (gaps.length < 3) return 0;
+
+  // 読み取り方向で末尾に来る側の間隔
+  const tolGap = (direction === 'ltr' ? gaps[gaps.length - 1] : gaps[0]) as number;
+  const others = (direction === 'ltr' ? gaps.slice(0, -1) : gaps.slice(1))
+    .slice()
+    .sort((a, b) => a - b);
+  const median = others[others.length >> 1] as number;
+  if (median <= 0) return 0;
+
+  const ratio = tolGap / median;
+  if (ratio >= SPACING_DECISIVE_RATIO) return 0;
+
+  // 反対側が決定的に広いなら、この向きは不利
+  const oppositeGap = (direction === 'ltr' ? gaps[0] : gaps[gaps.length - 1]) as number;
+  if (oppositeGap / median >= SPACING_DECISIVE_RATIO) return SPACING_COST_SCALE;
+  return 0;
 }
 
 /** ランごとの色候補（近い順、遠すぎるものは除外）。 */
@@ -317,10 +377,11 @@ export function jointReadResistor(
             const nearest = (candidates[keptIndices[runIndex] as number] as Candidate[])[0];
             if (nearest !== undefined && METALLIC_COLORS.has(nearest.color)) metallicDigits += 1;
           }
+          const spacing = spacingCost(capped, keptIndices, direction, oriented.length);
           consider({
             decoded,
             direction,
-            cost: meanDeltaE + dropCost + snapCost + rankCost + rangeCost,
+            cost: meanDeltaE + dropCost + snapCost + rankCost + rangeCost + spacing,
             meanDeltaE,
             metallicDigits,
             keptIndices: [...keptIndices],
