@@ -7,6 +7,7 @@ import { refineBoxExtent } from '../../src/core/refine.js';
 import { rectify } from '../../src/core/rectify.js';
 import { bodyColumns } from '../../src/core/roiMapping.js';
 import { bandRuns } from '../../src/core/bands/segment.js';
+import { recoverFromPair, recoverToleranceRun } from '../../src/core/bands/recover.js';
 import { alignRunsToBands } from '../../src/core/bands/align.js';
 import {
   addObservations,
@@ -89,16 +90,24 @@ interface Run {
 
 /**
  * 本体ランを除いた「バンド候補」のランを取り出す。
- * 解析側と同じ `bandRuns` を通すので、較正と本番で条件がずれない。
+ *
+ * 解析側（`core/pipeline.ts`）と**同じ順序で同じ関数を通す**ので、較正と本番で
+ * 条件がずれない。`bandRuns` だけを呼んでいた時期があり、本番に拾い直しが
+ * 入ったあともコメントだけが「ずれない」と主張していた。
+ *
+ * 拾い直しが較正で効くのは 39 枚中 1 枚（`38-10Mohm` がラン 2 → 3 本）だけで、
+ * 学習されるパレットも成績も変わらない。**それでも揃えておく**のは、
+ * 経路が分かれていると「較正の質が上がったのに読み取りが上がらない」
+ * ときの切り分けができなくなるため（`docs/07` の較正と読み取りの非対称性）。
  */
 function extractRuns(profile: readonly ProfileSample[]): Run[] {
-  return bandRuns(profile, {
+  return recoverFromPair(profile, recoverToleranceRun(profile, bandRuns(profile, {
     edgeDeltaE: EDGE_DELTA_E,
     minBandWidth: MIN_RUN_LENGTH,
     clusterDeltaE: CLUSTER_DELTA_E,
     bodyLightnessWeight: BODY_LIGHTNESS_WEIGHT,
     keepEdgeRuns: true,
-  }).map((run) => ({ lab: run.lab, length: run.end - run.start }));
+  }))).map((run) => ({ lab: run.lab, length: run.end - run.start }));
 }
 
 function medianLab(samples: readonly LabColor[]): LabColor {
