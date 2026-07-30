@@ -60,6 +60,9 @@ const elements = {
   liveWrap: requireElement<HTMLDivElement>('#live-wrap'),
   liveVideo: requireElement<HTMLVideoElement>('#live-video'),
   overlayCanvas: requireElement<HTMLCanvasElement>('#overlay-canvas'),
+  liveReading: requireElement<HTMLDivElement>('#live-reading'),
+  liveReadingValue: requireElement<HTMLOutputElement>('#live-reading-value'),
+  liveReadingNote: requireElement<HTMLSpanElement>('#live-reading-note'),
   emptyError: requireElement<HTMLParagraphElement>('#empty-error'),
   cameraControls: requireElement<HTMLDivElement>('#camera-controls'),
   fileInput: requireElement<HTMLInputElement>('#file-input'),
@@ -190,14 +193,18 @@ function requireElement<T extends Element>(selector: string): T {
  */
 function applyMode(next: Mode): void {
   mode = next;
+  // ライブ中はカメラアプリのような全画面レイアウトに切り替える（CSS 側）
+  document.body.classList.toggle('live', next === 'live');
   elements.emptyState.hidden = next !== 'idle';
   elements.liveWrap.hidden = next !== 'live';
+  elements.liveReading.hidden = next !== 'live';
   elements.sourceCanvas.hidden = next !== 'still';
   elements.captureButton.hidden = next !== 'live';
   elements.cameraSelect.hidden = next !== 'live';
   elements.resetButton.hidden = next !== 'still';
   elements.cameraButton.textContent =
     next === 'live' ? 'カメラを停止' : next === 'still' ? 'カメラに戻る' : 'カメラを開始';
+  updateStickyBar();
 }
 
 function setSource(canvas: HTMLCanvasElement): void {
@@ -494,6 +501,7 @@ function renderReading(result: AnalysisResult): void {
   const text = formatReading(result.reading);
   elements.reading.textContent = text;
   elements.stickyReading.textContent = text;
+  elements.liveReadingValue.textContent = text;
 
   // 「?」だけだと理由が分からないので、何と読めたか・なぜ出さないかを添える
   if (result.reading === null) {
@@ -506,6 +514,7 @@ function renderReading(result: AnalysisResult): void {
   } else {
     elements.readingNote.textContent = `確信度 ${formatConfidence(result.reading.confidence)}`;
   }
+  elements.liveReadingNote.textContent = elements.readingNote.textContent;
 
   const rows: [string, string][] = [];
   if (result.reading !== null) {
@@ -552,9 +561,13 @@ async function loadFile(file: File): Promise<void> {
   setSource(decoded.canvas);
 }
 
-/** 画像かカメラが載っていれば、下部の固定バーを出す。 */
+/**
+ * 静止画が載っていれば、下部の固定バーを出す。
+ * ライブ全画面ではオーバーレイのバーと重なるので出さない
+ * （値は左上のオーバーレイ、学習は「この画で止める」後の静止画で）。
+ */
 function updateStickyBar(): void {
-  elements.stickyBar.hidden = source === null;
+  elements.stickyBar.hidden = source === null || mode === 'live';
 }
 
 function stopCamera(): void {

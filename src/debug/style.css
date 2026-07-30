@@ -125,6 +125,122 @@ button.camera-control[aria-pressed='true'] {
   font-weight: 600;
 }
 
+/* ---- ライブ全画面 ---------------------------------------------------- */
+
+/*
+ * ライブ中はカメラアプリのように映像を画面いっぱいに出し、ボタン・推測値・
+ * ステータスを映像の上にオーバーレイする。DOM は動かさず body.live の
+ * CSS だけで切り替える（静止画・空状態は従来レイアウトのまま）。
+ * 映像は object-fit を使わず contain 相当（見えている範囲 = 解析範囲）。
+ */
+body.live {
+  overflow: hidden;
+}
+
+body.live .stage {
+  position: fixed;
+  inset: 0;
+  z-index: 40;
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-end;
+  background: #000;
+}
+
+/* 映像レイヤ。バー類はこの上に通常フローで重なる */
+body.live .stage-media {
+  position: absolute;
+  inset: 0;
+  min-height: 0;
+  border: none;
+  border-radius: 0;
+  background: #000;
+}
+
+/*
+ * 画面いっぱいに拡大する。object-fit だと要素矩形と映像矩形がズレて
+ * オーバーレイが狂うので使わない。width 指定 + height:auto + max-height の
+ * 組み合わせなら、置換要素の制約解決（CSS 2.1 §10.4）がアスペクト比を
+ * 保ったまま「幅いっぱい、収まらなければ高さいっぱい」にしてくれる。
+ */
+body.live #live-video {
+  width: 100vw;
+  height: auto;
+  max-height: 100vh;
+  max-height: 100dvh;
+}
+
+/* 推測値: 左上にオーバーレイ。操作の邪魔をしないよう素通しにする */
+.live-reading {
+  position: absolute;
+  top: calc(0.75rem + env(safe-area-inset-top));
+  left: 0.75rem;
+  right: 0.75rem;
+  color: #fff;
+  pointer-events: none;
+  text-shadow: 0 1px 3px rgb(0 0 0 / 0.8);
+}
+
+#live-reading-value {
+  display: block;
+  font-size: 2rem;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  line-height: 1.2;
+}
+
+#live-reading-note {
+  font-size: 0.8rem;
+  opacity: 0.85;
+}
+
+/* ボタン類: 半透明チップにして映像の上でも読めるようにする */
+body.live .camera-controls,
+body.live .stage-bar {
+  position: relative;
+  z-index: 1;
+  justify-content: center;
+  margin: 0;
+  padding: 0.4rem 0.75rem;
+}
+
+body.live .stage-bar {
+  flex-direction: column-reverse; /* ステータス行をボタンの上に出す */
+  align-items: center;
+  gap: 0.3rem;
+  padding-bottom: calc(0.6rem + env(safe-area-inset-bottom));
+}
+
+body.live .stage-actions {
+  justify-content: center;
+}
+
+body.live .stage-bar .status {
+  margin: 0;
+  color: rgb(255 255 255 / 0.75);
+  text-align: center;
+}
+
+body.live .stage-bar button,
+body.live .stage-bar select,
+body.live .camera-controls button {
+  border-color: rgb(255 255 255 / 0.35);
+  background: rgb(0 0 0 / 0.45);
+  color: #fff;
+}
+
+body.live .stage-bar button.primary {
+  border-color: transparent;
+  background: var(--accent);
+  color: #002733;
+}
+
+body.live button.camera-control[aria-pressed='true'] {
+  border-color: transparent;
+  background: var(--accent);
+  color: #002733;
+}
+
 .empty-state {
   padding: 2rem 1rem;
   text-align: center;
