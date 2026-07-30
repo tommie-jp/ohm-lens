@@ -44,6 +44,8 @@ import {
 import { renderCameraControls, type ControlsHandle } from './cameraControlsView.js';
 import { coverVisibleRect, pointerToCanvas, type Rect as ViewRect } from './viewMapping.js';
 import { guideBox } from './guide.js';
+import { createCameraMenu } from './cameraMenu.js';
+import { pinchZoom, touchDistance } from './pinchZoom.js';
 
 /**
  * Phase 0 の目視確認ツール。
@@ -74,7 +76,7 @@ const elements = {
   cameraButton: requireElement<HTMLButtonElement>('#camera-button'),
   captureButton: requireElement<HTMLButtonElement>('#capture-button'),
   resetButton: requireElement<HTMLButtonElement>('#reset-button'),
-  cameraSelect: requireElement<HTMLSelectElement>('#camera-select'),
+  cameraMenu: requireElement<HTMLDivElement>('#camera-menu'),
   emptyState: requireElement<HTMLDivElement>('#empty-state'),
   statusLine: requireElement<HTMLParagraphElement>('#status-line'),
   engineStatus: requireElement<HTMLParagraphElement>('#engine-status'),
@@ -169,8 +171,21 @@ let reopening = false;
  * 検出が一瞬途切れた保持フレームでは直前の確定値を出し続ける。
  */
 let stableReadingText: string | null = null;
+/**
+ * オーバーレイに出すバンド（長方形・番号・色名）。値が確定したときだけ
+ * 差し替える。毎フレーム描き直すとちらついて色名が読めない。
+ */
+let stableBands: readonly Band[] = [];
 /** 読み取り値のちらつき止め。カメラや検出方式が変わるたびに作り直す。 */
 let stabilizer: StabilizerState = createStabilizer();
+
+/** 現在のデジタルズーム倍率（ピンチと接写で使う）。 */
+let previewZoom = 1;
+
+/** カメラ選択メニュー。選んだら開き直す。 */
+const cameraMenuHandle = createCameraMenu(elements.cameraMenu, (deviceId) => {
+  void beginCamera(deviceId);
+});
 
 let cameraControlsHandle: ControlsHandle | null = null;
 /** 背面超広角レンズの deviceId。ストリームが生きている間に取ってキャッシュする。 */
@@ -180,8 +195,8 @@ let ultraWideId: string | null = null;
 const MAX_LEARN_COST = 25;
 
 /** ライブのオーバーレイ文字の大きさ [画面 px]。 */
-const LIVE_LABEL_SCREEN_PX = 16;
-const LIVE_READING_SCREEN_PX = 22;
+const LIVE_LABEL_SCREEN_PX = 18;
+const LIVE_READING_SCREEN_PX = 28;
 
 /**
  * 現在有効なパレット。サーバの学習結果に、この場で学習した上書きを重ねる。
@@ -224,7 +239,7 @@ function applyMode(next: Mode): void {
   elements.sourceCanvas.hidden = next !== 'still';
   elements.captureButton.hidden = next !== 'live';
   elements.liveAutoButton.hidden = next !== 'live';
-  elements.cameraSelect.hidden = next !== 'live';
+  if (next !== 'live') elements.cameraMenu.hidden = true;
   elements.resetButton.hidden = next !== 'still';
   elements.cameraButton.textContent =
     next === 'live' ? '停止' : next === 'still' ? 'カメラに戻る' : 'カメラを開始';
@@ -371,7 +386,7 @@ function analyzeLiveFrame(frame: HTMLCanvasElement): void {
 
   const smoothed = pushBox(smoother, detectedBox);
   smoother = smoothed.state;
-  drawLiveOverlay(frame, smoothed.box, result, false);
+  drawLiveOverlay(frame, smoothed.box, false);
 }
 
 /**
@@ -385,6 +400,7 @@ function analyzeLiveFrame(frame: HTMLCanvasElement): void {
 function resetReading(): void {
   stabilizer = createStabilizer();
   stableReadingText = null;
+  stableBands = [];
   elements.liveReadingValue.textContent = '?';
   elements.liveReadingNote.textContent = '';
 }
@@ -392,7 +408,11 @@ function resetReading(): void {
 function settleReading(result: AnalysisResult): void {
   const settled = pushReading(stabilizer, formatReading(result.reading));
   stabilizer = settled.state;
-  if (settled.stable !== null) stableReadingText = settled.stable;
+  if (settled.stable !== null) {
+    stableReadingText = settled.stable;
+    // 値と一緒にバンドも確定させる（表示は次に確定するまで動かさない）
+    stableBands = result.bands;
+  }
 
   const confirmed = settled.stable ?? stableReadingText;
   elements.liveReadingValue.textContent = confirmed ?? '?';
@@ -418,7 +438,7 @@ function analyzeGuideFrame(frame: HTMLCanvasElement): void {
 
   const result = renderAnalysis(rectify(image, box, ROI_OPTIONS));
   settleReading(result);
-  drawLiveOverlay(frame, box, result, true);
+  drawLiveOverlay(frame, box, true);
 }
 
 /**
@@ -467,7 +487,6 @@ function overlayTextPx(frame: HTMLCanvasElement, screenPx: number): number {
 function drawLiveOverlay(
   frame: HTMLCanvasElement,
   box: OrientedBox | null,
-  result: AnalysisResult | null,
   isGuide: boolean,
 ): void {
   const overlay = elements.overlayCanvas;
@@ -479,9 +498,10 @@ function drawLiveOverlay(
   context.clearRect(0, 0, overlay.width, overlay.height);
   if (box === null) return;
 
-  // 保持フレーム（検出が一瞬途切れた間）はバンドが無いので枠と値だけ描く
-  drawDetectionOverlay(context, box, result?.bands ?? [], {
+  // バンドは確定したものを描く（毎フレーム描き直すとちらついて読めない）
+  drawDetectionOverlay(context, box, stableBands, {
     rectify: ROI_OPTIONS,
+    japanese: false,
     textPx: overlayTextPx(frame, LIVE_LABEL_SCREEN_PX),
   });
   // ガイドには軸合わせの中心線を添える
@@ -710,19 +730,22 @@ function stopCamera(): void {
   void releaseWakeLock();
 }
 
-/** カメラ一覧をプルダウンに反映する（ラベルは権限取得後でないと空になる）。 */
-async function refreshCameraList(): Promise<void> {
+/**
+ * カメラ一覧をメニューに反映する（ラベルは権限取得後でないと空になる）。
+ * リストはフルネーム、ボタンは省略名を出す。
+ */
+async function refreshCameraList(selectedId?: string): Promise<void> {
   const cameras = await listCameras();
-  elements.cameraSelect.replaceChildren();
-  cameras.forEach((device, index) => {
-    const option = document.createElement('option');
-    option.value = device.deviceId;
-    option.textContent =
-      device.label === '' ? `カメラ ${index + 1}` : shortCameraLabel(device.label);
-    elements.cameraSelect.append(option);
+  const choices = cameras.map((device, index) => {
+    const fallback = `カメラ ${index + 1}`;
+    return {
+      deviceId: device.deviceId,
+      label: device.label === '' ? fallback : device.label,
+      short: device.label === '' ? fallback : shortCameraLabel(device.label),
+    };
   });
   const preferred = pickPreferredCamera(cameras);
-  if (preferred !== null) elements.cameraSelect.value = preferred.deviceId;
+  cameraMenuHandle.setChoices(choices, selectedId ?? preferred?.deviceId ?? null);
 }
 
 async function beginCamera(deviceId?: string, options: { macro?: boolean } = {}): Promise<void> {
@@ -837,8 +860,67 @@ async function toggleMacro(on: boolean): Promise<void> {
  */
 function setPreviewZoom(zoom: number): void {
   const value = Math.max(1, zoom);
+  previewZoom = value;
   camera?.setDigitalZoom(value);
   elements.liveVideo.style.transform = value === 1 ? '' : `scale(${String(value)})`;
+}
+
+/**
+ * 2 本指のピンチで映像だけを拡大する。
+ *
+ * ブラウザ標準のピンチはページごと拡大してしまい、ガイド枠や操作ボタンまで
+ * 大きくなる。ここで受け取って `setPreviewZoom` に流すことで、拡大するのは
+ * 映像だけになり、ガイドとボタンは画面に固定されたままになる
+ * （オーバーレイ canvas は切り出し済みフレームを描くので拡大しない）。
+ */
+let pinchStart: { distance: number; zoom: number } | null = null;
+
+function pinchPoints(event: TouchEvent): [Touch, Touch] | null {
+  const [first, second] = [event.touches[0], event.touches[1]];
+  if (event.touches.length !== 2 || first === undefined || second === undefined) return null;
+  return [first, second];
+}
+
+elements.liveWrap.addEventListener(
+  'touchstart',
+  (event) => {
+    const points = pinchPoints(event);
+    if (points === null) return;
+    event.preventDefault();
+    pinchStart = { distance: touchDistance(points[0], points[1]), zoom: previewZoom };
+  },
+  { passive: false },
+);
+
+elements.liveWrap.addEventListener(
+  'touchmove',
+  (event) => {
+    const points = pinchPoints(event);
+    if (points === null || pinchStart === null) return;
+    event.preventDefault();
+    setPreviewZoom(
+      pinchZoom(pinchStart.zoom, pinchStart.distance, touchDistance(points[0], points[1])),
+    );
+  },
+  { passive: false },
+);
+
+for (const name of ['touchend', 'touchcancel']) {
+  elements.liveWrap.addEventListener(name, () => {
+    pinchStart = null;
+  });
+}
+
+// iOS Safari はピンチで gesture 系イベントも投げる。放っておくとページごと
+// 拡大されるので、ライブ表示の上では止める。
+for (const name of ['gesturestart', 'gesturechange', 'gestureend']) {
+  elements.liveWrap.addEventListener(
+    name,
+    (event) => {
+      event.preventDefault();
+    },
+    { passive: false },
+  );
 }
 
 /**
@@ -978,9 +1060,7 @@ elements.captureButton.addEventListener('click', () => {
   setSource(frozen);
 });
 
-elements.cameraSelect.addEventListener('change', () => {
-  void beginCamera(elements.cameraSelect.value);
-});
+
 
 elements.fileInput.accept = SUPPORTED_ACCEPT;
 

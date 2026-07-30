@@ -103,6 +103,7 @@ export function drawBandLabels(
   const baseOffset = box.thickness * LABEL_OFFSET_RATIO;
   // 注釈は水平な抵抗器なら下、垂直なら右に出す
   const side = labelSide(box);
+  const direction = labelDirection(box);
 
   context.save();
   context.font = `700 ${fontPx}px system-ui, sans-serif`;
@@ -126,15 +127,22 @@ export function drawBandLabels(
     context.fillStyle = BOX_COLOR;
     context.fillText(String(index + 1), numberAt.x, numberAt.y);
 
-    // ラベル: 番号の直下（右横）。詰まって重なるので 1 本ごとに段違いにする
-    const stagger = index % 2 === 0 ? 0 : fontPx * 1.15;
-    const anchor = labelAnchor(box, options.rectify, band, baseOffset + stagger + fontPx * 0.8, side);
-    const text = (options.japanese ?? true) ? BAND_COLOR_JA[band.color] : band.color;
+    // ラベル: 全バンドで同じ位置から始める（バンドごとに段違いにしない）。
+    // 英語名は長いので、注釈を積む向きへ寝かせて縦に伸ばす。
+    const anchor = labelAnchor(box, options.rectify, band, baseOffset + fontPx * 1.4, side);
+    const text = (options.japanese ?? true) ? BAND_COLOR_JA[band.color] : band.color.toUpperCase();
 
-    // 色玉（金/黄、灰/銀の取り違えを目で確かめられるように）
+    context.save();
+    context.translate(anchor.x, anchor.y);
+    // 注釈の向きへ回す。水平な抵抗器なら 90°＝文字は下へ伸び、文字の下
+    // （ベースライン側）が画面の左を向く
+    context.rotate(Math.atan2(direction.y, direction.x));
+    context.textAlign = 'left';
+
+    // 色玉（金/黄、灰/銀の取り違えを目で確かめられるように）。文字の手前に置く
     const dot = fontPx * 0.32;
     context.beginPath();
-    context.arc(anchor.x - fontPx * 0.72, anchor.y, dot, 0, Math.PI * 2);
+    context.arc(-fontPx * 0.55, 0, dot, 0, Math.PI * 2);
     context.fillStyle = bandColorCss(band.color);
     context.fill();
     context.strokeStyle = 'rgb(0 0 0 / 0.5)';
@@ -144,9 +152,10 @@ export function drawBandLabels(
     // 文字: どんな背景でも読めるよう白フチ + 黒文字
     context.lineWidth = Math.max(2, fontPx * 0.22);
     context.strokeStyle = 'rgb(255 255 255 / 0.92)';
-    context.strokeText(text, anchor.x + fontPx * 0.22, anchor.y);
+    context.strokeText(text, 0, 0);
     context.fillStyle = '#111';
-    context.fillText(text, anchor.x + fontPx * 0.22, anchor.y);
+    context.fillText(text, 0, 0);
+    context.restore();
     context.globalAlpha = 1;
   });
 
@@ -210,7 +219,8 @@ export function drawReadingLabel(
       Math.min(MAX_READING_PX, Math.max(MIN_READING_PX, box.thickness * READING_SIZE_RATIO)),
   );
   const direction = labelDirection(box);
-  const offset = box.thickness / 2 + fontPx;
+  // バンドラベルの反対側へ 2 行ぶん離す。1 行だと枠の縁に重なって読みにくい
+  const offset = box.thickness / 2 + fontPx * 2;
   const x = box.centerX - direction.x * offset;
   const y = box.centerY - direction.y * offset;
 

@@ -102,6 +102,11 @@ body {
   inset: 0;
   /* デジタルズームで video を CSS 拡大するので、はみ出しを切り落とす */
   overflow: hidden;
+  /*
+   * ピンチは自前で受けて映像だけを拡大する（ガイドとボタンは画面に固定）。
+   * ブラウザ標準のピンチ・スクロールに先に取られないようにする。
+   */
+  touch-action: none;
 }
 
 #live-video,
@@ -124,6 +129,40 @@ body {
   flex-wrap: wrap;
   gap: 0.5rem;
   margin-top: 0.6rem;
+}
+
+/* ---- カメラ選択メニュー ---------------------------------------------- */
+
+/* ボタンは省略名、開いたリストはフルネーム（幅が限られるのはボタンだけ） */
+.camera-menu {
+  position: relative;
+}
+
+.camera-menu-list {
+  position: absolute;
+  bottom: calc(100% + 0.35rem);
+  left: 0;
+  z-index: 2;
+  display: flex;
+  flex-direction: column;
+  min-width: max-content;
+  max-width: 80vw;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: Canvas;
+  overflow: hidden;
+}
+
+button.camera-menu-option {
+  border: none;
+  border-radius: 0;
+  background: none;
+  text-align: left;
+  white-space: nowrap;
+}
+
+button.camera-menu-option[aria-selected='true'] {
+  font-weight: 600;
 }
 
 /* トグル系（カメラ操作・自動検出）の押下状態はアクセント色で示す */
@@ -251,6 +290,17 @@ body.live .camera-controls button {
   border-color: rgb(255 255 255 / 0.35);
   background: rgb(0 0 0 / 0.45);
   color: #fff;
+}
+
+/* 開いたリストは映像の上でも読めるよう、はっきり塗る */
+body.live .camera-menu-list {
+  border-color: rgb(255 255 255 / 0.35);
+  background: rgb(0 0 0 / 0.85);
+}
+
+body.live button.camera-menu-option {
+  border-color: transparent;
+  background: none;
 }
 
 body.live .stage-bar button.primary {
