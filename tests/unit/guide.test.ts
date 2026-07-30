@@ -1,15 +1,20 @@
 import { describe, expect, it } from 'vitest';
-import { guideBox, GUIDE_ASPECT_RATIO, GUIDE_LENGTH_RATIO } from '../../src/debug/guide.js';
+import {
+  guideBox,
+  GUIDE_ASPECT_RATIO,
+  GUIDE_CENTER_Y_RATIO,
+  GUIDE_LENGTH_RATIO,
+} from '../../src/debug/guide.js';
 import { coverVisibleRect } from '../../src/debug/viewMapping.js';
 
 describe('guideBox', () => {
-  it('可視範囲の中央に水平な枠を置く', () => {
+  it('横は可視範囲の中央、縦は上から 30% に水平な枠を置く', () => {
     // Act
     const box = guideBox({ x: 0, y: 0, width: 800, height: 600 });
 
     // Assert
     expect(box.centerX).toBe(400);
-    expect(box.centerY).toBe(300);
+    expect(box.centerY).toBe(600 * GUIDE_CENTER_Y_RATIO);
     expect(box.angleDeg).toBe(0);
   });
 
@@ -22,13 +27,13 @@ describe('guideBox', () => {
     expect(box.thickness).toBeCloseTo((800 * GUIDE_LENGTH_RATIO) / GUIDE_ASPECT_RATIO);
   });
 
-  it('可視範囲がずれていれば枠もその中央に付いていく', () => {
+  it('可視範囲がずれていれば枠もその範囲に付いていく', () => {
     // Arrange: 左右が切れて中央 400px だけ見えている状態
-    const box = guideBox({ x: 200, y: 0, width: 400, height: 300 });
+    const box = guideBox({ x: 200, y: 60, width: 400, height: 300 });
 
     // Assert
     expect(box.centerX).toBe(400);
-    expect(box.centerY).toBe(150);
+    expect(box.centerY).toBe(60 + 300 * GUIDE_CENTER_Y_RATIO);
   });
 
   it('縦に潰れた可視範囲でも枠が高さからはみ出さない', () => {

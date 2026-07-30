@@ -120,10 +120,11 @@ export async function applyZoom(track: MediaStreamTrack, value: number): Promise
 
 /**
  * 超広角トラックの画角を zoom で 1x 近くへ寄せる（接写に入ったときの初期値）。
- * **zoom 非対応なら何もしない**（applyZoom が null を返すだけ）。
+ * **zoom 非対応なら null**（iOS Safari など）。呼び出し側は足りないぶんを
+ * デジタルズームで詰める。
  */
-export async function applyNearFocusZoom(track: MediaStreamTrack): Promise<void> {
-  await applyZoom(track, NEAR_FOCUS_ZOOM);
+export function applyNearFocusZoom(track: MediaStreamTrack): Promise<number | null> {
+  return applyZoom(track, NEAR_FOCUS_ZOOM);
 }
 
 /** トーチ（ライト）を点灯/消灯し、実際に適用できたかを返す。**非対応なら false**。 */

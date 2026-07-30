@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  applyNearFocusZoom,
   applyTorch,
   applyZoom,
   isFrontFacing,
@@ -102,6 +103,29 @@ describe('applyZoom', () => {
   it('applyConstraints が拒まれても例外にせず null', async () => {
     const { track } = fakeTrack({ capabilities: { zoom: { min: 1, max: 4 } }, failApply: true });
     expect(await applyZoom(track, 2)).toBeNull();
+  });
+});
+
+describe('applyNearFocusZoom', () => {
+  it('接写の初期ズームを適用し、適用値を返す', async () => {
+    // Arrange
+    const { track } = fakeTrack({ capabilities: { zoom: { min: 1, max: 8 } } });
+
+    // Act / Assert
+    expect(await applyNearFocusZoom(track)).toBe(NEAR_FOCUS_ZOOM);
+  });
+
+  it('zoom 非対応なら null（呼び出し側がデジタルズームで詰める）', async () => {
+    // Arrange: iOS Safari は zoom 制約に対応しない
+    const { track } = fakeTrack({ capabilities: {} });
+
+    // Act / Assert
+    expect(await applyNearFocusZoom(track)).toBeNull();
+  });
+
+  it('最大ズームが足りなければ届いたところまでを返す', async () => {
+    const { track } = fakeTrack({ capabilities: { zoom: { min: 1, max: 1.5 } } });
+    expect(await applyNearFocusZoom(track)).toBe(1.5);
   });
 });
 

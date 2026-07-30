@@ -153,10 +153,16 @@ let mode: Mode = 'idle';
 /** 検出枠の時間平滑化。カメラを開き直すたびに作り直す。 */
 let smoother: SmootherState = createSmoother();
 /**
- * ライブの自動検出。OFF のときは画面中央のガイド枠に抵抗器を合わせて
+ * ライブの自動検出。OFF（既定）のときはガイド枠に抵抗器を合わせて
  * もらい、その枠をそのまま読み取り範囲にする。
  */
-let liveAutoDetect = true;
+let liveAutoDetect = false;
+
+/**
+ * レンズを開き直している最中は live 表示のまま保つ。
+ * 一瞬でも空状態に落とすと全画面レイアウトが崩れてちらつく。
+ */
+let reopening = false;
 /** オーバーレイに出す値。検出が一瞬途切れた保持フレームでも出し続ける。 */
 let lastReadingText = '?';
 
@@ -166,6 +172,13 @@ let ultraWideId: string | null = null;
 
 /** 学習に使うには対応付けコストがこの水準以下であること。 */
 const MAX_LEARN_COST = 25;
+
+/**
+ * ライブのオーバーレイ文字の大きさ [画面 px]。
+ * 映像を隠しすぎないよう、普通の本文より少し小さめにする。
+ */
+const LIVE_LABEL_SCREEN_PX = 12;
+const LIVE_READING_SCREEN_PX = 14;
 
 /**
  * 現在有効なパレット。サーバの学習結果に、この場で学習した上書きを重ねる。
@@ -387,11 +400,32 @@ function analyzeGuideFrame(frame: HTMLCanvasElement): void {
  * 表示サイズから逆算する。
  */
 function visibleFrameRect(frame: HTMLCanvasElement): ViewRect {
-  const display = elements.liveVideo.getBoundingClientRect();
-  return coverVisibleRect(
-    { width: frame.width, height: frame.height },
-    { width: display.width, height: display.height },
-  );
+  return coverVisibleRect({ width: frame.width, height: frame.height }, overlayDisplaySize());
+}
+
+/**
+ * オーバーレイ canvas の表示サイズ。
+ *
+ * 測るのは video ではなく canvas。video はデジタルズームで CSS 拡大されて
+ * いることがあり、`getBoundingClientRect` が拡大後の値を返してしまう。
+ * canvas は拡大せず素のまま重ねているので、こちらが解析フレームの基準になる。
+ */
+function overlayDisplaySize(): { width: number; height: number } {
+  const rect = elements.overlayCanvas.getBoundingClientRect();
+  return { width: rect.width, height: rect.height };
+}
+
+/**
+ * オーバーレイの文字サイズ [フレーム px]。
+ *
+ * 画面上での見た目の大きさを一定にしたいので、画面 px を
+ * フレーム px に換算する。解析解像度が自動調整で変わっても文字の
+ * 見た目は変わらない。
+ */
+function overlayTextPx(frame: HTMLCanvasElement, screenPx: number): number {
+  const display = overlayDisplaySize();
+  const screenPerFrame = Math.max(display.width / frame.width, display.height / frame.height);
+  return screenPerFrame > 0 ? screenPx / screenPerFrame : screenPx;
 }
 
 /**
@@ -416,8 +450,11 @@ function drawLiveOverlay(
   if (box === null) return;
 
   // 保持フレーム（検出が一瞬途切れた間）はバンドが無いので枠と値だけ描く
-  drawDetectionOverlay(context, box, result?.bands ?? [], { rectify: ROI_OPTIONS });
-  drawReadingLabel(context, box, lastReadingText);
+  drawDetectionOverlay(context, box, result?.bands ?? [], {
+    rectify: ROI_OPTIONS,
+    textPx: overlayTextPx(frame, LIVE_LABEL_SCREEN_PX),
+  });
+  drawReadingLabel(context, box, lastReadingText, overlayTextPx(frame, LIVE_READING_SCREEN_PX));
 }
 
 /**
@@ -623,7 +660,8 @@ function stopCamera(): void {
   camera = null;
   cameraControlsHandle?.clear();
   cameraControlsHandle = null;
-  if (mode === 'live') applyMode('idle');
+  setPreviewZoom(1);
+  if (mode === 'live' && !reopening) applyMode('idle');
   statusParts.input = '';
   statusParts.performance = '';
   renderStatus();
@@ -645,7 +683,10 @@ async function refreshCameraList(): Promise<void> {
 }
 
 async function beginCamera(deviceId?: string, options: { macro?: boolean } = {}): Promise<void> {
+  // 開き直しの間も全画面のまま保つ（失敗時は下の catch で空状態へ落とす）
+  reopening = mode === 'live';
   stopCamera();
+  reopening = false;
   statusParts.input = 'カメラを起動中…';
   statusParts.performance = '';
   renderStatus();
@@ -705,7 +746,10 @@ async function setupCameraControls(): Promise<void> {
     {
       onTorch: (on) => (camera === null ? Promise.resolve(false) : applyTorch(camera.track, on)),
       onZoom: async (level) => {
-        if (camera !== null) await applyZoom(camera.track, level);
+        if (camera === null) return;
+        // ハードウェアの zoom で足りないぶんはデジタルズームで詰める
+        const applied = await applyZoom(camera.track, level);
+        setPreviewZoom(level / (applied ?? 1));
       },
       onMacro: (on) => toggleMacro(on),
     },
@@ -732,10 +776,26 @@ async function toggleMacro(on: boolean): Promise<void> {
     return;
   }
 
-  // 超広角は 0.5x 相当で画角が広すぎるので、1x 近くへクロップし直す
-  await applyNearFocusZoom(camera.track);
+  // 超広角は 0.5x 相当で画角が広い。まずハードウェアの zoom で 1x 近くへ
+  // 戻し、足りないぶんはデジタルズームで詰める。iOS Safari は zoom 制約に
+  // 対応しないので、これが無いと被写体が小さいまま写る。
+  const applied = await applyNearFocusZoom(camera.track);
+  setPreviewZoom(NEAR_FOCUS_ZOOM / (applied ?? 1));
   cameraControlsHandle?.setMacro(true);
   cameraControlsHandle?.setZoom(NEAR_FOCUS_ZOOM);
+}
+
+/**
+ * 解析とプレビューの両方を同じ倍率で拡大する（デジタルズーム）。
+ *
+ * 解析側は中央だけを切り出す（`setDigitalZoom`）。プレビュー側は video を
+ * CSS で拡大する。オーバーレイ canvas には拡大をかけない — canvas の中身は
+ * 切り出し済みのフレームなので、素のままで拡大後の映像とぴったり重なる。
+ */
+function setPreviewZoom(zoom: number): void {
+  const value = Math.max(1, zoom);
+  camera?.setDigitalZoom(value);
+  elements.liveVideo.style.transform = value === 1 ? '' : `scale(${String(value)})`;
 }
 
 /**

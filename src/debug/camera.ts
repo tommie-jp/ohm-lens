@@ -61,6 +61,12 @@ export interface CameraSession {
   /** 映像トラック。トーチ・ズームなど applyConstraints 系の操作に使う。 */
   readonly track: MediaStreamTrack;
   readonly status: CameraStatus;
+  /**
+   * 解析フレームの中央だけを使う倍率（デジタルズーム）。
+   * ハードウェアの zoom が効かない端末（iOS Safari）で画角を戻すのに使う。
+   * プレビュー側の拡大は呼び出し側が CSS で合わせること。
+   */
+  setDigitalZoom(zoom: number): void;
   stop(): void;
 }
 
@@ -80,12 +86,23 @@ async function tryLockColor(track: MediaStreamTrack): Promise<boolean> {
 /**
  * 映像フレームを解析しやすい大きさの canvas に写す。
  * 元解像度のまま解析すると重いので長辺を抑える。
+ *
+ * `zoom` が 1 より大きいときは中央だけを切り出す（デジタルズーム）。
+ * 切り出した範囲を解析解像度いっぱいに使うので、拡大しても色帯に割ける
+ * 画素は減らない。
  */
-function drawScaled(video: HTMLVideoElement, canvas: HTMLCanvasElement, maxSize: number): void {
+function drawScaled(
+  video: HTMLVideoElement,
+  canvas: HTMLCanvasElement,
+  maxSize: number,
+  zoom: number,
+): void {
   const { videoWidth, videoHeight } = video;
-  const scale = Math.min(1, maxSize / Math.max(videoWidth, videoHeight));
-  const width = Math.max(1, Math.round(videoWidth * scale));
-  const height = Math.max(1, Math.round(videoHeight * scale));
+  const sourceWidth = videoWidth / zoom;
+  const sourceHeight = videoHeight / zoom;
+  const scale = Math.min(1, maxSize / Math.max(sourceWidth, sourceHeight));
+  const width = Math.max(1, Math.round(sourceWidth * scale));
+  const height = Math.max(1, Math.round(sourceHeight * scale));
 
   if (canvas.width !== width || canvas.height !== height) {
     canvas.width = width;
@@ -93,7 +110,17 @@ function drawScaled(video: HTMLVideoElement, canvas: HTMLCanvasElement, maxSize:
   }
   const context = canvas.getContext('2d', { willReadFrequently: true });
   if (context === null) return;
-  context.drawImage(video, 0, 0, width, height);
+  context.drawImage(
+    video,
+    (videoWidth - sourceWidth) / 2,
+    (videoHeight - sourceHeight) / 2,
+    sourceWidth,
+    sourceHeight,
+    0,
+    0,
+    width,
+    height,
+  );
 }
 
 /**
@@ -139,6 +166,7 @@ export async function startCamera(options: CameraOptions): Promise<CameraSession
   let stopped = false;
   let handle: number | null = null;
   let lastAnalysed = 0;
+  let digitalZoom = 1;
 
   const onFrame = (): void => {
     if (stopped) return;
@@ -148,7 +176,7 @@ export async function startCamera(options: CameraOptions): Promise<CameraSession
       lastAnalysed = now;
       const started = performance.now();
       try {
-        drawScaled(video, frameCanvas, analysisSize(budget));
+        drawScaled(video, frameCanvas, analysisSize(budget), digitalZoom);
         options.onFrame(frameCanvas);
       } catch (error) {
         options.onError(error);
@@ -178,6 +206,9 @@ export async function startCamera(options: CameraOptions): Promise<CameraSession
     video,
     track,
     status,
+    setDigitalZoom(zoom: number): void {
+      digitalZoom = Math.max(1, zoom);
+    },
     stop(): void {
       stopped = true;
       if (handle !== null) {

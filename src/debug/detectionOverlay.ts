@@ -34,6 +34,12 @@ export interface OverlayOptions {
   readonly rectify: RectifyOptions;
   /** 色名を日本語 1 文字で出す（既定）。false なら英字 3 文字。 */
   readonly japanese?: boolean;
+  /**
+   * ラベルの文字サイズ [px]（描画先の座標系）。
+   * 未指定なら箱の太さに比例させる（焼き込み画像向け）。ライブ表示では
+   * 見た目の大きさを一定にしたいので、換算した値を渡す。
+   */
+  readonly textPx?: number;
 }
 
 function drawPolygon(
@@ -91,7 +97,8 @@ export function drawBandLabels(
   if (bands.length === 0) return;
 
   const fontPx = Math.round(
-    Math.min(MAX_LABEL_PX, Math.max(MIN_LABEL_PX, box.thickness * LABEL_SIZE_RATIO)),
+    options.textPx ??
+      Math.min(MAX_LABEL_PX, Math.max(MIN_LABEL_PX, box.thickness * LABEL_SIZE_RATIO)),
   );
   const baseOffset = box.thickness * LABEL_OFFSET_RATIO;
   // 注釈は水平な抵抗器なら下、垂直なら右に出す
@@ -164,9 +171,11 @@ export function drawReadingLabel(
   context: CanvasRenderingContext2D,
   box: OrientedBox,
   text: string,
+  textPx?: number,
 ): void {
   const fontPx = Math.round(
-    Math.min(MAX_READING_PX, Math.max(MIN_READING_PX, box.thickness * READING_SIZE_RATIO)),
+    textPx ??
+      Math.min(MAX_READING_PX, Math.max(MIN_READING_PX, box.thickness * READING_SIZE_RATIO)),
   );
   const direction = labelDirection(box);
   const offset = box.thickness / 2 + fontPx;
