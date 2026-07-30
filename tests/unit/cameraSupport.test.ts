@@ -5,6 +5,7 @@ import {
   describeCameraError,
   manualColorConstraints,
   pickPreferredCamera,
+  shortCameraLabel,
   supportsManualColor,
 } from '../../src/debug/cameraSupport.js';
 
@@ -131,6 +132,31 @@ describe('describeCameraError', () => {
 
   it('Error でない値でも文字列を返す', () => {
     expect(typeof describeCameraError('文字列')).toBe('string');
+  });
+});
+
+describe('shortCameraLabel', () => {
+  it.each([
+    ['背面トリプルカメラ', '背トリプル'],
+    ['前面超広角カメラ', '前超広'],
+    ['背面超広角カメラ', '背超広'],
+    ['背面カメラ', '背'],
+    ['前面カメラ', '前'],
+    ['背面望遠カメラ', '背望遠'],
+  ])('%s を %s に縮める', (label, expected) => {
+    expect(shortCameraLabel(label)).toBe(expected);
+  });
+
+  it('英語ラベルは末尾の Camera を落とす', () => {
+    expect(shortCameraLabel('Back Camera')).toBe('Back');
+  });
+
+  it('縮めても長すぎるラベルは切り詰める', () => {
+    expect(shortCameraLabel('背面広角レンズ搭載モジュール').length).toBeLessThanOrEqual(10);
+  });
+
+  it('空のラベルは既定名にする（権限取得前は空になる）', () => {
+    expect(shortCameraLabel('  ')).toBe('カメラ');
   });
 });
 

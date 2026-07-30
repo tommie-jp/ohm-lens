@@ -205,10 +205,9 @@ body.live .stage::after {
   text-shadow: 0 1px 3px rgb(0 0 0 / 0.8);
 }
 
-/* 映像を隠しすぎないよう、本文より少し小さめに出す */
 #live-reading-value {
   display: block;
-  font-size: 0.9rem;
+  font-size: 1.35rem;
   font-weight: 700;
   font-variant-numeric: tabular-nums;
   line-height: 1.3;

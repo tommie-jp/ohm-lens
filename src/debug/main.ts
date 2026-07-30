@@ -26,10 +26,11 @@ import { createSampleCanvas } from './sample.js';
 import { drawProfile } from './profileView.js';
 import { context2d } from './canvas.js';
 import { decodeImageFile } from './decodeImage.js';
-import { drawDetectionOverlay, drawReadingLabel } from './detectionOverlay.js';
+import { drawDetectionOverlay, drawGuideCenterline, drawReadingLabel } from './detectionOverlay.js';
 import { SUPPORTED_ACCEPT } from '../core/imageFormat.js';
 import { listCameras, pickPreferredCamera, startCamera, type CameraSession } from './camera.js';
-import { describeCameraError } from './cameraSupport.js';
+import { describeCameraError, shortCameraLabel } from './cameraSupport.js';
+import { createStabilizer, pushReading, type StabilizerState } from './readingStabilizer.js';
 import { createSmoother, pushBox, type SmootherState } from './boxSmoother.js';
 import {
   applyNearFocusZoom,
@@ -163,8 +164,13 @@ let liveAutoDetect = false;
  * 一瞬でも空状態に落とすと全画面レイアウトが崩れてちらつく。
  */
 let reopening = false;
-/** オーバーレイに出す値。検出が一瞬途切れた保持フレームでも出し続ける。 */
-let lastReadingText = '?';
+/**
+ * オーバーレイに出す値。連続して同じ値が出るまでは null（出さない）。
+ * 検出が一瞬途切れた保持フレームでは直前の確定値を出し続ける。
+ */
+let stableReadingText: string | null = null;
+/** 読み取り値のちらつき止め。カメラや検出方式が変わるたびに作り直す。 */
+let stabilizer: StabilizerState = createStabilizer();
 
 let cameraControlsHandle: ControlsHandle | null = null;
 /** 背面超広角レンズの deviceId。ストリームが生きている間に取ってキャッシュする。 */
@@ -173,12 +179,9 @@ let ultraWideId: string | null = null;
 /** 学習に使うには対応付けコストがこの水準以下であること。 */
 const MAX_LEARN_COST = 25;
 
-/**
- * ライブのオーバーレイ文字の大きさ [画面 px]。
- * 映像を隠しすぎないよう、普通の本文より少し小さめにする。
- */
-const LIVE_LABEL_SCREEN_PX = 12;
-const LIVE_READING_SCREEN_PX = 14;
+/** ライブのオーバーレイ文字の大きさ [画面 px]。 */
+const LIVE_LABEL_SCREEN_PX = 16;
+const LIVE_READING_SCREEN_PX = 22;
 
 /**
  * 現在有効なパレット。サーバの学習結果に、この場で学習した上書きを重ねる。
@@ -224,7 +227,7 @@ function applyMode(next: Mode): void {
   elements.cameraSelect.hidden = next !== 'live';
   elements.resetButton.hidden = next !== 'still';
   elements.cameraButton.textContent =
-    next === 'live' ? 'カメラを停止' : next === 'still' ? 'カメラに戻る' : 'カメラを開始';
+    next === 'live' ? '停止' : next === 'still' ? 'カメラに戻る' : 'カメラを開始';
   updateStickyBar();
 }
 
@@ -364,11 +367,37 @@ function analyzeLiveFrame(frame: HTMLCanvasElement): void {
   detectedBox = null;
   const roi = buildRoi(true);
   const result = roi === null ? null : renderAnalysis(roi);
-  if (result !== null) lastReadingText = formatReading(result.reading);
+  if (result !== null) settleReading(result);
 
   const smoothed = pushBox(smoother, detectedBox);
   smoother = smoothed.state;
-  drawLiveOverlay(frame, smoothed.box, result);
+  drawLiveOverlay(frame, smoothed.box, result, false);
+}
+
+/**
+ * 読み取り値を確定させて表示に反映する。
+ *
+ * ライブでは 1 フレームごとに値が揺れるので、**同じ値が続けて出るまでは
+ * 出さない**。揺れている間は「読み取り中…」にして、誤った値が一瞬でも
+ * 確定値のように見えないようにする。
+ */
+/** 確定済みの値を捨てる（カメラや検出方式が変わったとき）。 */
+function resetReading(): void {
+  stabilizer = createStabilizer();
+  stableReadingText = null;
+  elements.liveReadingValue.textContent = '?';
+  elements.liveReadingNote.textContent = '';
+}
+
+function settleReading(result: AnalysisResult): void {
+  const settled = pushReading(stabilizer, formatReading(result.reading));
+  stabilizer = settled.state;
+  if (settled.stable !== null) stableReadingText = settled.stable;
+
+  const confirmed = settled.stable ?? stableReadingText;
+  elements.liveReadingValue.textContent = confirmed ?? '?';
+  elements.liveReadingNote.textContent =
+    confirmed === null ? '読み取り中…' : (elements.readingNote.textContent ?? '');
 }
 
 /**
@@ -388,8 +417,8 @@ function analyzeGuideFrame(frame: HTMLCanvasElement): void {
   renderStatus();
 
   const result = renderAnalysis(rectify(image, box, ROI_OPTIONS));
-  lastReadingText = formatReading(result.reading);
-  drawLiveOverlay(frame, box, result);
+  settleReading(result);
+  drawLiveOverlay(frame, box, result, true);
 }
 
 /**
@@ -439,6 +468,7 @@ function drawLiveOverlay(
   frame: HTMLCanvasElement,
   box: OrientedBox | null,
   result: AnalysisResult | null,
+  isGuide: boolean,
 ): void {
   const overlay = elements.overlayCanvas;
   if (overlay.width !== frame.width || overlay.height !== frame.height) {
@@ -454,7 +484,17 @@ function drawLiveOverlay(
     rectify: ROI_OPTIONS,
     textPx: overlayTextPx(frame, LIVE_LABEL_SCREEN_PX),
   });
-  drawReadingLabel(context, box, lastReadingText, overlayTextPx(frame, LIVE_READING_SCREEN_PX));
+  // ガイドには軸合わせの中心線を添える
+  if (isGuide) drawGuideCenterline(context, box, overlayTextPx(frame, 1));
+  // 値は確定してから出す（揺れている間は何も出さない）
+  if (stableReadingText !== null) {
+    drawReadingLabel(
+      context,
+      box,
+      stableReadingText,
+      overlayTextPx(frame, LIVE_READING_SCREEN_PX),
+    );
+  }
 }
 
 /**
@@ -582,11 +622,14 @@ async function loadPaletteFromServer(): Promise<void> {
   }
 }
 
+/**
+ * 右カラムの読み取り表示。1 フレームごとの生の値を出す。
+ * ライブのオーバーレイ表示は {@link settleReading} が確定してから出す。
+ */
 function renderReading(result: AnalysisResult): void {
   const text = formatReading(result.reading);
   elements.reading.textContent = text;
   elements.stickyReading.textContent = text;
-  elements.liveReadingValue.textContent = text;
 
   // 「?」だけだと理由が分からないので、何と読めたか・なぜ出さないかを添える
   if (result.reading === null) {
@@ -599,7 +642,6 @@ function renderReading(result: AnalysisResult): void {
   } else {
     elements.readingNote.textContent = `確信度 ${formatConfidence(result.reading.confidence)}`;
   }
-  elements.liveReadingNote.textContent = elements.readingNote.textContent;
 
   const rows: [string, string][] = [];
   if (result.reading !== null) {
@@ -675,7 +717,8 @@ async function refreshCameraList(): Promise<void> {
   cameras.forEach((device, index) => {
     const option = document.createElement('option');
     option.value = device.deviceId;
-    option.textContent = device.label === '' ? `カメラ ${index + 1}` : device.label;
+    option.textContent =
+      device.label === '' ? `カメラ ${index + 1}` : shortCameraLabel(device.label);
     elements.cameraSelect.append(option);
   });
   const preferred = pickPreferredCamera(cameras);
@@ -715,7 +758,7 @@ async function beginCamera(deviceId?: string, options: { macro?: boolean } = {})
 
   elements.emptyError.textContent = '';
   smoother = createSmoother();
-  lastReadingText = '?';
+  resetReading();
   applyMode('live');
   void requestWakeLock();
   const { status } = camera;
@@ -916,7 +959,7 @@ elements.liveAutoButton.addEventListener('click', () => {
   elements.liveAutoButton.setAttribute('aria-pressed', String(liveAutoDetect));
   // 検出方式が変わると枠が飛ぶので、平滑化の履歴は持ち越さない
   smoother = createSmoother();
-  lastReadingText = '?';
+  resetReading();
   statusParts.detection = '';
   renderStatus();
 });

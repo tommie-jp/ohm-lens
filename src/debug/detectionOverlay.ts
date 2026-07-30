@@ -153,6 +153,38 @@ export function drawBandLabels(
   context.restore();
 }
 
+/** ガイドの中心線の太さと破線の刻み [px]（`unitPx` 倍して使う）。 */
+const GUIDE_LINE_WIDTH = 1.5;
+const GUIDE_DASH = [6, 5] as const;
+
+/**
+ * ガイド枠の長手方向の中心線（細い白の点線）。
+ *
+ * 抵抗器の軸を枠の中心へ合わせる目印。枠の内側なので、被写体を隠さない
+ * よう細く点線にする。
+ *
+ * @param unitPx 画面 1px に相当する描画先の px 数（線の太さを一定に保つ）
+ */
+export function drawGuideCenterline(
+  context: CanvasRenderingContext2D,
+  box: OrientedBox,
+  unitPx = 1,
+): void {
+  const rad = (box.angleDeg * Math.PI) / 180;
+  const halfX = (Math.cos(rad) * box.length) / 2;
+  const halfY = (Math.sin(rad) * box.length) / 2;
+
+  context.save();
+  context.strokeStyle = 'rgb(255 255 255 / 0.9)';
+  context.lineWidth = GUIDE_LINE_WIDTH * unitPx;
+  context.setLineDash(GUIDE_DASH.map((step) => step * unitPx));
+  context.beginPath();
+  context.moveTo(box.centerX - halfX, box.centerY - halfY);
+  context.lineTo(box.centerX + halfX, box.centerY + halfY);
+  context.stroke();
+  context.restore();
+}
+
 /** 推定値の文字の大きさ（箱の太さに対する割合）。バンドラベルより大きく。 */
 const READING_SIZE_RATIO = 0.75;
 

@@ -99,6 +99,41 @@ export function displayCameraLabel(label: string): string {
   return trimmed;
 }
 
+/**
+ * ラベルを短縮する置換。長い順に当てる（超広角 → 広角 の順でないと
+ * 「超広角」が「超広」にならず「超」+「広」に割れる）。
+ */
+const LABEL_SHORTENINGS: readonly (readonly [RegExp, string])[] = [
+  [/背面/g, '背'],
+  [/前面/g, '前'],
+  [/超広角/g, '超広'],
+  [/広角/g, '広'],
+  [/望遠/g, '望遠'],
+  [/デュアル/g, 'デュアル'],
+  [/\s*カメラ\s*$/, ''],
+  [/\s*Camera\s*$/i, ''],
+];
+
+/** 短縮してもこれを超えるなら、末尾を落として詰める。 */
+const MAX_SHORT_LABEL = 10;
+
+/**
+ * カメラ名を選択欄に収まる長さへ縮める。
+ *
+ * 端末が返すラベルは「背面トリプルカメラ」「前面超広角カメラ」のように
+ * 長く、映像の上に重ねる操作バーでは折り返して邪魔になる。意味が分かる
+ * 最小限まで削る（背面トリプルカメラ → 背トリプル）。
+ */
+export function shortCameraLabel(label: string): string {
+  const base = displayCameraLabel(label);
+  const shortened = LABEL_SHORTENINGS.reduce(
+    (text, [pattern, replacement]) => text.replace(pattern, replacement),
+    base,
+  ).trim();
+  if (shortened === '') return base;
+  return shortened.length > MAX_SHORT_LABEL ? shortened.slice(0, MAX_SHORT_LABEL) : shortened;
+}
+
 const ERROR_MESSAGES: Record<string, string> = {
   NotAllowedError: 'カメラの使用が許可されませんでした。ブラウザの権限設定を確認してください。',
   NotFoundError: 'カメラが見つかりませんでした。接続を確認してください。',
