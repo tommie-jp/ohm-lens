@@ -21,16 +21,27 @@ import {
   formatReading,
   MIN_REPORTABLE_CONFIDENCE,
 } from '../core/format.js';
-import { clamp } from '../core/math.js';
 import type { Band, BandColor, LabColor } from '../types.js';
 import { createSampleCanvas } from './sample.js';
 import { drawProfile } from './profileView.js';
 import { context2d } from './canvas.js';
 import { decodeImageFile } from './decodeImage.js';
-import { drawDetectionOverlay } from './detectionOverlay.js';
+import { drawDetectionOverlay, drawReadingLabel } from './detectionOverlay.js';
 import { SUPPORTED_ACCEPT } from '../core/imageFormat.js';
 import { listCameras, pickPreferredCamera, startCamera, type CameraSession } from './camera.js';
 import { describeCameraError } from './cameraSupport.js';
+import { createSmoother, pushBox, type SmootherState } from './boxSmoother.js';
+import {
+  applyNearFocusZoom,
+  applyTorch,
+  applyZoom,
+  findUltraWideDeviceId,
+  isFrontFacing,
+  NEAR_FOCUS_ZOOM,
+  readCameraCapabilities,
+} from './cameraControls.js';
+import { renderCameraControls, type ControlsHandle } from './cameraControlsView.js';
+import { pointerToCanvas } from './viewMapping.js';
 
 /**
  * Phase 0 の目視確認ツール。
@@ -46,6 +57,11 @@ interface Rect {
 }
 
 const elements = {
+  liveWrap: requireElement<HTMLDivElement>('#live-wrap'),
+  liveVideo: requireElement<HTMLVideoElement>('#live-video'),
+  overlayCanvas: requireElement<HTMLCanvasElement>('#overlay-canvas'),
+  emptyError: requireElement<HTMLParagraphElement>('#empty-error'),
+  cameraControls: requireElement<HTMLDivElement>('#camera-controls'),
   fileInput: requireElement<HTMLInputElement>('#file-input'),
   pickFile: requireElement<HTMLButtonElement>('#pick-file'),
   sampleButton: requireElement<HTMLButtonElement>('#sample-button'),
@@ -120,6 +136,24 @@ let camera: CameraSession | null = null;
 let observations: Observations = loadObservations();
 let lastResult: AnalysisResult | null = null;
 
+/**
+ * 画面のモード。
+ * - idle: 何も映していない（空状態とエラー表示）
+ * - live: カメラのライブ映像 + オーバーレイ
+ * - still: 静止画（ファイル・サンプル・キャプチャ）
+ */
+type Mode = 'idle' | 'live' | 'still';
+let mode: Mode = 'idle';
+
+/** 検出枠の時間平滑化。カメラを開き直すたびに作り直す。 */
+let smoother: SmootherState = createSmoother();
+/** オーバーレイに出す値。検出が一瞬途切れた保持フレームでも出し続ける。 */
+let lastReadingText = '?';
+
+let cameraControlsHandle: ControlsHandle | null = null;
+/** 背面超広角レンズの deviceId。ストリームが生きている間に取ってキャッシュする。 */
+let ultraWideId: string | null = null;
+
 /** 学習に使うには対応付けコストがこの水準以下であること。 */
 const MAX_LEARN_COST = 25;
 
@@ -150,11 +184,25 @@ function requireElement<T extends Element>(selector: string): T {
   return element;
 }
 
+/**
+ * 画面の表示状態をモードから一括で決める。
+ * hidden の個別操作をここに集め、状態の食い違いを防ぐ。
+ */
+function applyMode(next: Mode): void {
+  mode = next;
+  elements.emptyState.hidden = next !== 'idle';
+  elements.liveWrap.hidden = next !== 'live';
+  elements.sourceCanvas.hidden = next !== 'still';
+  elements.captureButton.hidden = next !== 'live';
+  elements.cameraSelect.hidden = next !== 'live';
+  elements.resetButton.hidden = next !== 'still';
+  elements.cameraButton.textContent =
+    next === 'live' ? 'カメラを停止' : next === 'still' ? 'カメラに戻る' : 'カメラを開始';
+}
+
 function setSource(canvas: HTMLCanvasElement): void {
   source = canvas;
-  elements.emptyState.hidden = true;
-  elements.sourceCanvas.hidden = false;
-  elements.resetButton.hidden = false;
+  applyMode('still');
   updateStickyBar();
   elements.sourceCanvas.width = canvas.width;
   elements.sourceCanvas.height = canvas.height;
@@ -168,18 +216,6 @@ function setSource(canvas: HTMLCanvasElement): void {
     height: Math.max(1, Math.round(canvas.height * 0.4)),
   };
   analyzeSelection();
-}
-
-/** canvas 上のポインタ座標を画像の内在解像度に変換する。 */
-function toCanvasPoint(event: PointerEvent): { x: number; y: number } {
-  const canvas = elements.sourceCanvas;
-  const rect = canvas.getBoundingClientRect();
-  const scaleX = canvas.width / rect.width;
-  const scaleY = canvas.height / rect.height;
-  return {
-    x: clamp((event.clientX - rect.left) * scaleX, 0, canvas.width),
-    y: clamp((event.clientY - rect.top) * scaleY, 0, canvas.height),
-  };
 }
 
 function redrawSource(): void {
@@ -205,11 +241,11 @@ function redrawSource(): void {
  * 自動検出が有効なら、画像全体から抵抗器を探して水平化する
  * （`tests/fixtures` と同じ経路）。無効なら選択範囲をそのまま使う。
  */
-function buildRoi(): RoiImage | null {
+function buildRoi(auto: boolean): RoiImage | null {
   if (source === null) return null;
   const context = context2d(source, { willReadFrequently: true });
 
-  if (elements.autoToggle.checked) {
+  if (auto) {
     const full = context.getImageData(0, 0, source.width, source.height);
     const image: RoiImage = { width: full.width, height: full.height, data: full.data };
     const located = locateResistor(image);
@@ -239,14 +275,11 @@ function buildRoi(): RoiImage | null {
   return { width: roi.width, height: roi.height, data: roi.data };
 }
 
-function analyzeSelection(): void {
-  if (source === null) return;
-
-  redrawSource();
-
-  const roi = buildRoi();
-  if (roi === null) return;
-
+/**
+ * ROI を解析し、右カラム（ROI 表示・プロファイル・バンド表・値）を更新する。
+ * 静止画とライブの両経路がここを通る。
+ */
+function renderAnalysis(roi: RoiImage): AnalysisResult {
   elements.roiCanvas.width = roi.width;
   elements.roiCanvas.height = roi.height;
   const roiContext = context2d(elements.roiCanvas);
@@ -270,7 +303,66 @@ function analyzeSelection(): void {
   drawProfile(elements.profileCanvas, result.profile, result.bands);
   renderBands(result.bands);
   renderReading(result);
-  drawOverlay(result);
+  return result;
+}
+
+function analyzeSelection(): void {
+  if (mode !== 'still' || source === null) return;
+
+  redrawSource();
+
+  const roi = buildRoi(elements.autoToggle.checked);
+  if (roi === null) return;
+
+  drawOverlay(renderAnalysis(roi));
+}
+
+/**
+ * ライブ映像の 1 フレームを解析してオーバーレイを描き直す。
+ *
+ * プレビューは video 要素がそのまま映し続けるので、映像は描き直さない。
+ * 手動 ROI はフレームサイズが自動調整で変わると絶対座標が破綻するため、
+ * ライブ中は常に自動検出を使う。描画には平滑化した枠を使い、解析には
+ * 生の検出枠を使う（平滑遅れを色帯読み取りに持ち込まない）。
+ */
+function analyzeLiveFrame(frame: HTMLCanvasElement): void {
+  source = frame;
+  updateStickyBar();
+
+  detectedBox = null;
+  const roi = buildRoi(true);
+  const result = roi === null ? null : renderAnalysis(roi);
+  if (result !== null) lastReadingText = formatReading(result.reading);
+
+  const smoothed = pushBox(smoother, detectedBox);
+  smoother = smoothed.state;
+  drawLiveOverlay(frame, smoothed.box, result);
+}
+
+/**
+ * ライブ用オーバーレイ。透明 canvas に枠・バンド・値だけを描く。
+ *
+ * canvas の内在解像度を毎回解析フレームに合わせるので、検出座標
+ * （解析フレーム座標系）を変換なしでそのまま描ける。CSS 側は video と
+ * 同じ矩形に引き伸ばされる（アスペクト比が同じなのでズレない）。
+ */
+function drawLiveOverlay(
+  frame: HTMLCanvasElement,
+  box: OrientedBox | null,
+  result: AnalysisResult | null,
+): void {
+  const overlay = elements.overlayCanvas;
+  if (overlay.width !== frame.width || overlay.height !== frame.height) {
+    overlay.width = frame.width;
+    overlay.height = frame.height;
+  }
+  const context = context2d(overlay);
+  context.clearRect(0, 0, overlay.width, overlay.height);
+  if (box === null) return;
+
+  // 保持フレーム（検出が一瞬途切れた間）はバンドが無いので枠と値だけ描く
+  drawDetectionOverlay(context, box, result?.bands ?? [], { rectify: ROI_OPTIONS });
+  drawReadingLabel(context, box, lastReadingText);
 }
 
 /**
@@ -449,6 +541,7 @@ function formatLab(lab: LabColor): string {
 }
 
 async function loadFile(file: File): Promise<void> {
+  stopCamera();
   statusParts.input = `${file.name} を読み込み中…`;
   renderStatus();
   const decoded = await decodeImageFile(file);
@@ -459,13 +552,6 @@ async function loadFile(file: File): Promise<void> {
   setSource(decoded.canvas);
 }
 
-/** カメラ稼働中は「静止画として扱う」操作を隠す。 */
-function setCameraRunning(running: boolean): void {
-  elements.cameraButton.textContent = running ? 'カメラを停止' : 'カメラを開始';
-  elements.captureButton.hidden = !running;
-  elements.cameraSelect.hidden = !running;
-}
-
 /** 画像かカメラが載っていれば、下部の固定バーを出す。 */
 function updateStickyBar(): void {
   elements.stickyBar.hidden = source === null;
@@ -474,7 +560,9 @@ function updateStickyBar(): void {
 function stopCamera(): void {
   camera?.stop();
   camera = null;
-  setCameraRunning(false);
+  cameraControlsHandle?.clear();
+  cameraControlsHandle = null;
+  if (mode === 'live') applyMode('idle');
   statusParts.input = '';
   statusParts.performance = '';
   renderStatus();
@@ -495,7 +583,7 @@ async function refreshCameraList(): Promise<void> {
   if (preferred !== null) elements.cameraSelect.value = preferred.deviceId;
 }
 
-async function beginCamera(deviceId?: string): Promise<void> {
+async function beginCamera(deviceId?: string, options: { macro?: boolean } = {}): Promise<void> {
   stopCamera();
   statusParts.input = 'カメラを起動中…';
   statusParts.performance = '';
@@ -503,12 +591,10 @@ async function beginCamera(deviceId?: string): Promise<void> {
 
   try {
     camera = await startCamera({
+      videoElement: elements.liveVideo,
       ...(deviceId === undefined ? {} : { deviceId }),
-      onFrame: (frame) => {
-        source = frame;
-        updateStickyBar();
-        analyzeSelection();
-      },
+      ...(options.macro === true ? { exactEnvironment: true } : {}),
+      onFrame: analyzeLiveFrame,
       onStats: (stats, analysisPx) => {
         statusParts.performance = `${stats.fps.toFixed(1)}fps ${stats.meanMs.toFixed(0)}ms ${analysisPx}px`;
         renderStatus();
@@ -520,11 +606,15 @@ async function beginCamera(deviceId?: string): Promise<void> {
   } catch (error) {
     statusParts.input = describeCameraError(error);
     renderStatus();
-    setCameraRunning(false);
+    elements.emptyError.textContent = describeCameraError(error);
+    applyMode('idle');
     return;
   }
 
-  setCameraRunning(true);
+  elements.emptyError.textContent = '';
+  smoother = createSmoother();
+  lastReadingText = '?';
+  applyMode('live');
   void requestWakeLock();
   const { status } = camera;
   statusParts.input = `${status.label} ${status.width}×${status.height}`;
@@ -533,6 +623,58 @@ async function beginCamera(deviceId?: string): Promise<void> {
     (elements.engineStatus.textContent ?? '') +
     (status.manualColorLocked ? ' / WB・露出を固定できました' : ' / WB・露出は自動（固定不可）');
   await refreshCameraList();
+  await setupCameraControls();
+}
+
+/**
+ * トーチ・ズーム・接写のボタン行を capability に応じて出す。
+ * ラベル（超広角の検出に使う）は権限取得後でないと空なので、カメラが
+ * 起動してから呼ぶ。非対応の端末では行ごと出ない（それが正常）。
+ */
+async function setupCameraControls(): Promise<void> {
+  if (camera === null) return;
+  const track = camera.track;
+  const capabilities = readCameraCapabilities(track);
+  ultraWideId = await findUltraWideDeviceId();
+
+  cameraControlsHandle = renderCameraControls(
+    elements.cameraControls,
+    capabilities,
+    ultraWideId !== null,
+    {
+      onTorch: (on) => (camera === null ? Promise.resolve(false) : applyTorch(camera.track, on)),
+      onZoom: async (level) => {
+        if (camera !== null) await applyZoom(camera.track, level);
+      },
+      onMacro: (on) => toggleMacro(on),
+    },
+  );
+}
+
+/**
+ * 接写（超広角レンズ）の切替。
+ *
+ * レンズの変更はトラックの開き直しが必要（トーチ・ズームと違い
+ * applyConstraints では効かない）。iOS は 2 カメラ同時オープンを拒むため、
+ * beginCamera が先に旧トラックを止めてから開く。開いた後に前面カメラへ
+ * 誤解決されていないか検証し、駄目なら通常の背面カメラへ戻す。
+ */
+async function toggleMacro(on: boolean): Promise<void> {
+  if (!on || ultraWideId === null) {
+    await beginCamera();
+    return;
+  }
+
+  await beginCamera(ultraWideId, { macro: true });
+  if (camera === null || isFrontFacing(camera.track)) {
+    await beginCamera(); // 超広角を開けなかった。通常の背面カメラで続ける
+    return;
+  }
+
+  // 超広角は 0.5x 相当で画角が広すぎるので、1x 近くへクロップし直す
+  await applyNearFocusZoom(camera.track);
+  cameraControlsHandle?.setMacro(true);
+  cameraControlsHandle?.setZoom(NEAR_FOCUS_ZOOM);
 }
 
 /**
@@ -680,6 +822,7 @@ elements.pickFile.addEventListener('click', () => {
 });
 
 elements.sampleButton.addEventListener('click', () => {
+  stopCamera();
   statusParts.input = '合成サンプル';
   renderStatus();
   setSource(createSampleCanvas());
@@ -691,9 +834,7 @@ elements.resetButton.addEventListener('click', () => {
   source = null;
   detectedBox = null;
   lastResult = null;
-  elements.sourceCanvas.hidden = true;
-  elements.emptyState.hidden = false;
-  elements.resetButton.hidden = true;
+  applyMode('idle');
   elements.fileInput.value = '';
   statusParts.input = '';
   statusParts.detection = '';
@@ -726,12 +867,12 @@ elements.copyLabel.addEventListener('click', () => {
 elements.sourceCanvas.addEventListener('pointerdown', (event) => {
   if (source === null) return;
   elements.sourceCanvas.setPointerCapture(event.pointerId);
-  dragStart = toCanvasPoint(event);
+  dragStart = pointerToCanvas(elements.sourceCanvas, event);
 });
 
 elements.sourceCanvas.addEventListener('pointermove', (event) => {
   if (dragStart === null) return;
-  const current = toCanvasPoint(event);
+  const current = pointerToCanvas(elements.sourceCanvas, event);
   selection = {
     x: Math.min(dragStart.x, current.x),
     y: Math.min(dragStart.y, current.y),
@@ -762,3 +903,19 @@ document.addEventListener('visibilitychange', () => {
 void loadPaletteFromServer();
 renderLabelJson();
 renderLearnCounts();
+
+/**
+ * 既定でカメラを開く（権限プロンプトはロード直後に出る）。
+ * 拒否・カメラなし・HTTP のときは空状態に戻り、ボタンから静止画も選べる。
+ * NotAllowedError 後の再試行はボタン経由（iOS Safari はユーザー操作の
+ * 文脈の方が成功しやすい）。
+ */
+function canAutoStart(): boolean {
+  return window.isSecureContext && typeof navigator.mediaDevices?.getUserMedia === 'function';
+}
+
+if (canAutoStart()) {
+  void beginCamera();
+} else {
+  elements.emptyError.textContent = 'カメラは HTTPS か localhost でしか使えません。';
+}

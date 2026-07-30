@@ -1,7 +1,7 @@
 import type { Band } from '../types.js';
 import type { OrientedBox } from '../core/locate.js';
 import type { RectifyOptions } from '../core/rectify.js';
-import { bandCorners, labelAnchor, labelSide } from '../core/roiMapping.js';
+import { bandCorners, labelAnchor, labelDirection, labelSide } from '../core/roiMapping.js';
 import { BAND_COLOR_JA, bandColorCss } from '../core/color/colors.js';
 
 /**
@@ -143,6 +143,45 @@ export function drawBandLabels(
     context.globalAlpha = 1;
   });
 
+  context.restore();
+}
+
+/** 推定値の文字の大きさ（箱の太さに対する割合）。バンドラベルより大きく。 */
+const READING_SIZE_RATIO = 0.75;
+
+const MIN_READING_PX = 14;
+const MAX_READING_PX = 56;
+
+/**
+ * 推定した抵抗値を箱のそばに描く（ライブ表示用）。
+ *
+ * バンドラベルは {@link labelDirection} の向き（水平なら下、垂直なら右）に
+ * 出るので、値はその**反対側**に出して重なりを避ける。渡す文字列は
+ * `formatReading()` の戻り値をそのまま使うこと — 確信度が閾値未満のとき
+ * 「?」になる規約を format 側が担保している。
+ */
+export function drawReadingLabel(
+  context: CanvasRenderingContext2D,
+  box: OrientedBox,
+  text: string,
+): void {
+  const fontPx = Math.round(
+    Math.min(MAX_READING_PX, Math.max(MIN_READING_PX, box.thickness * READING_SIZE_RATIO)),
+  );
+  const direction = labelDirection(box);
+  const offset = box.thickness / 2 + fontPx;
+  const x = box.centerX - direction.x * offset;
+  const y = box.centerY - direction.y * offset;
+
+  context.save();
+  context.font = `700 ${fontPx}px system-ui, sans-serif`;
+  context.textAlign = 'center';
+  context.textBaseline = 'middle';
+  context.lineWidth = Math.max(3, fontPx * 0.22);
+  context.strokeStyle = 'rgb(255 255 255 / 0.92)';
+  context.strokeText(text, x, y);
+  context.fillStyle = '#111';
+  context.fillText(text, x, y);
   context.restore();
 }
 

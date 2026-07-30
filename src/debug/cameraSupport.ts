@@ -12,6 +12,13 @@ const IDEAL_WIDTH = 1920;
 export interface VideoConstraintOptions {
   /** 使うカメラを直接指定する（デバイス一覧から選んだ場合） */
   readonly deviceId?: string;
+  /**
+   * deviceId 名指し時に背面カメラを強制する。iOS Safari は背面レンズの
+   * deviceId を前面カメラへ誤解決することがあり、`ideal` では防げない。
+   * `exact` にして誤解決を OverconstrainedError で失敗させ、呼び出し側で
+   * 通常の背面カメラへフォールバックする（41-QR-search の実機検証の知見）。
+   */
+  readonly exactEnvironment?: boolean;
 }
 
 /**
@@ -20,7 +27,11 @@ export interface VideoConstraintOptions {
  */
 export function buildVideoConstraints(options: VideoConstraintOptions = {}): MediaTrackConstraints {
   if (options.deviceId !== undefined) {
-    return { deviceId: { exact: options.deviceId }, width: { ideal: IDEAL_WIDTH } };
+    return {
+      deviceId: { exact: options.deviceId },
+      ...(options.exactEnvironment === true ? { facingMode: { exact: 'environment' } } : {}),
+      width: { ideal: IDEAL_WIDTH },
+    };
   }
   return { facingMode: 'environment', width: { ideal: IDEAL_WIDTH } };
 }

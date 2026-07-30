@@ -26,6 +26,20 @@ describe('buildVideoConstraints', () => {
     expect(constraints.deviceId).toEqual({ exact: 'abc123' });
     expect(constraints.facingMode).toBeUndefined();
   });
+
+  it('接写（超広角の名指し）では背面を exact で強制する', () => {
+    // Act: iOS が deviceId を前面へ誤解決したら OverconstrainedError にさせる
+    const constraints = buildVideoConstraints({ deviceId: 'ultra', exactEnvironment: true });
+
+    // Assert
+    expect(constraints.deviceId).toEqual({ exact: 'ultra' });
+    expect(constraints.facingMode).toEqual({ exact: 'environment' });
+  });
+
+  it('deviceId 指定なしでは exactEnvironment は効かない（通常の希望のまま）', () => {
+    const constraints = buildVideoConstraints({ exactEnvironment: true });
+    expect(constraints.facingMode).toBe('environment');
+  });
 });
 
 describe('pickPreferredCamera', () => {

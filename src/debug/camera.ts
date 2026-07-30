@@ -39,7 +39,15 @@ export interface CameraStatus {
 
 export interface CameraOptions {
   readonly deviceId?: string;
+  /**
+   * deviceId 名指し時に背面カメラを強制する。iOS Safari は deviceId を
+   * 前面カメラへ誤解決することがあるため、超広角レンズ（接写）を開くときは
+   * true にして失敗（OverconstrainedError）させる。
+   */
+  readonly exactEnvironment?: boolean;
   readonly analysisFps?: number;
+  /** プレビューに使う video 要素。未指定なら DOM 外に生成する。 */
+  readonly videoElement?: HTMLVideoElement;
   /** 間引いたフレームごとに呼ばれる。縮小済みの canvas を渡す。 */
   readonly onFrame: (frame: HTMLCanvasElement) => void;
   /** 負荷の実測値。fps 表示と自動調整の状況を出すのに使う。 */
@@ -50,6 +58,8 @@ export interface CameraOptions {
 /** 起動中のカメラ。停止するまでフレームを供給し続ける。 */
 export interface CameraSession {
   readonly video: HTMLVideoElement;
+  /** 映像トラック。トーチ・ズームなど applyConstraints 系の操作に使う。 */
+  readonly track: MediaStreamTrack;
   readonly status: CameraStatus;
   stop(): void;
 }
@@ -93,7 +103,12 @@ function drawScaled(video: HTMLVideoElement, canvas: HTMLCanvasElement, maxSize:
  */
 export async function startCamera(options: CameraOptions): Promise<CameraSession> {
   const stream = await navigator.mediaDevices.getUserMedia({
-    video: buildVideoConstraints(options.deviceId === undefined ? {} : { deviceId: options.deviceId }),
+    video: buildVideoConstraints({
+      ...(options.deviceId === undefined ? {} : { deviceId: options.deviceId }),
+      ...(options.exactEnvironment === undefined
+        ? {}
+        : { exactEnvironment: options.exactEnvironment }),
+    }),
     audio: false,
   });
 
@@ -105,7 +120,7 @@ export async function startCamera(options: CameraOptions): Promise<CameraSession
 
   const manualColorLocked = await tryLockColor(track);
 
-  const video = document.createElement('video');
+  const video = options.videoElement ?? document.createElement('video');
   video.srcObject = stream;
   video.playsInline = true;
   video.muted = true;
@@ -161,6 +176,7 @@ export async function startCamera(options: CameraOptions): Promise<CameraSession
 
   return {
     video,
+    track,
     status,
     stop(): void {
       stopped = true;
