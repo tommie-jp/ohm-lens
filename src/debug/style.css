@@ -88,24 +88,30 @@ body {
 
 /*
  * ライブ映像はプレビュー（video）と検出結果（canvas）を別レイヤに分ける。
- * video を素のアスペクト比のまま表示し（object-fit を使わない）、同じ
- * アスペクト比の canvas を全面に重ねれば、表示矩形は常に一致してズレない。
+ *
+ * 映像は画面いっぱい（object-fit: cover）で出す。オーバーレイ canvas にも
+ * **同じ cover** をかけるのが要点で、canvas の内在解像度は解析フレームと
+ * 同一（= video と同じ縦横比）なので、両者はまったく同じ切り取られ方を
+ * する。結果として表示矩形が一致し、検出座標を変換なしで描ける。
+ *
+ * cover では映像の左右または上下が画面外へ切れる。ガイド枠は
+ * `coverVisibleRect` で可視範囲を逆算してその内側に置く。
  */
 .live-wrap {
-  position: relative;
+  position: absolute;
+  inset: 0;
 }
 
-#live-video {
-  display: block;
-  max-width: 100%;
-  max-height: 60vh;
-}
-
+#live-video,
 #overlay-canvas {
   position: absolute;
   inset: 0;
   width: 100%;
   height: 100%;
+  object-fit: cover;
+}
+
+#overlay-canvas {
   pointer-events: none;
 }
 
@@ -118,7 +124,9 @@ body {
   margin-top: 0.6rem;
 }
 
-button.camera-control[aria-pressed='true'] {
+/* トグル系（カメラ操作・自動検出）の押下状態はアクセント色で示す */
+button.camera-control[aria-pressed='true'],
+#live-auto-button[aria-pressed='true'] {
   border-color: transparent;
   background: var(--accent);
   color: #002733;
@@ -158,21 +166,35 @@ body.live .stage-media {
 }
 
 /*
- * 画面いっぱいに拡大する。object-fit だと要素矩形と映像矩形がズレて
- * オーバーレイが狂うので使わない。width 指定 + height:auto + max-height の
- * 組み合わせなら、置換要素の制約解決（CSS 2.1 §10.4）がアスペクト比を
- * 保ったまま「幅いっぱい、収まらなければ高さいっぱい」にしてくれる。
+ * 明るい被写体の上でも白文字が読めるよう、上下に暗いグラデーションを敷く
+ * （カメラアプリの定石）。映像より上・操作バーより下の層に置く。
  */
-body.live #live-video {
-  width: 100vw;
-  height: auto;
-  max-height: 100vh;
-  max-height: 100dvh;
+body.live .stage::before,
+body.live .stage::after {
+  content: '';
+  position: absolute;
+  inset-inline: 0;
+  /* ::before は DOM 順で映像より前に来るので、明示しないと下に隠れる */
+  z-index: 1;
+  pointer-events: none;
+}
+
+body.live .stage::before {
+  top: 0;
+  height: 22%;
+  background: linear-gradient(to bottom, rgb(0 0 0 / 0.6), transparent);
+}
+
+body.live .stage::after {
+  bottom: 0;
+  height: 35%;
+  background: linear-gradient(to top, rgb(0 0 0 / 0.75), transparent);
 }
 
 /* 推測値: 左上にオーバーレイ。操作の邪魔をしないよう素通しにする */
 .live-reading {
   position: absolute;
+  z-index: 1;
   top: calc(0.75rem + env(safe-area-inset-top));
   left: 0.75rem;
   right: 0.75rem;
@@ -235,7 +257,8 @@ body.live .stage-bar button.primary {
   color: #002733;
 }
 
-body.live button.camera-control[aria-pressed='true'] {
+body.live button.camera-control[aria-pressed='true'],
+body.live #live-auto-button[aria-pressed='true'] {
   border-color: transparent;
   background: var(--accent);
   color: #002733;
@@ -554,8 +577,7 @@ td {
     font-size: 1rem;
   }
 
-  #source-canvas,
-  #live-video {
+  #source-canvas {
     max-height: 45vh;
   }
 

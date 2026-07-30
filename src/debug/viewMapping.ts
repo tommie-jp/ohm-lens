@@ -43,6 +43,35 @@ export function clientToIntrinsic(
   };
 }
 
+export interface Rect {
+  readonly x: number;
+  readonly y: number;
+  readonly width: number;
+  readonly height: number;
+}
+
+/**
+ * `object-fit: cover` で表示したときに、実際に画面へ出ている範囲
+ * （内在解像度の座標）を返す。
+ *
+ * cover は縦横比を保ったまま表示領域を埋めるので、はみ出した側が
+ * 左右または上下で均等に切り落とされる。ガイド枠のように「必ず見えて
+ * いなければ意味がない」ものは、フレーム全体ではなくこの範囲に収める。
+ */
+export function coverVisibleRect(
+  frame: IntrinsicSize,
+  display: { readonly width: number; readonly height: number },
+): Rect {
+  const scale = Math.max(display.width / frame.width, display.height / frame.height);
+  // 表示サイズが取れない（幅 0 など）ときはフレーム全体を可視とみなす
+  if (!Number.isFinite(scale) || scale <= 0) {
+    return { x: 0, y: 0, width: frame.width, height: frame.height };
+  }
+  const width = Math.min(frame.width, display.width / scale);
+  const height = Math.min(frame.height, display.height / scale);
+  return { x: (frame.width - width) / 2, y: (frame.height - height) / 2, width, height };
+}
+
 /** canvas 上のポインタ座標を canvas の内在解像度に変換する。 */
 export function pointerToCanvas(canvas: HTMLCanvasElement, event: PointerEvent): Point {
   const rect = canvas.getBoundingClientRect();

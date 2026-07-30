@@ -41,7 +41,8 @@ import {
   readCameraCapabilities,
 } from './cameraControls.js';
 import { renderCameraControls, type ControlsHandle } from './cameraControlsView.js';
-import { pointerToCanvas } from './viewMapping.js';
+import { coverVisibleRect, pointerToCanvas, type Rect as ViewRect } from './viewMapping.js';
+import { guideBox } from './guide.js';
 
 /**
  * Phase 0 の目視確認ツール。
@@ -63,6 +64,7 @@ const elements = {
   liveReading: requireElement<HTMLDivElement>('#live-reading'),
   liveReadingValue: requireElement<HTMLOutputElement>('#live-reading-value'),
   liveReadingNote: requireElement<HTMLSpanElement>('#live-reading-note'),
+  liveAutoButton: requireElement<HTMLButtonElement>('#live-auto-button'),
   emptyError: requireElement<HTMLParagraphElement>('#empty-error'),
   cameraControls: requireElement<HTMLDivElement>('#camera-controls'),
   fileInput: requireElement<HTMLInputElement>('#file-input'),
@@ -150,6 +152,11 @@ let mode: Mode = 'idle';
 
 /** 検出枠の時間平滑化。カメラを開き直すたびに作り直す。 */
 let smoother: SmootherState = createSmoother();
+/**
+ * ライブの自動検出。OFF のときは画面中央のガイド枠に抵抗器を合わせて
+ * もらい、その枠をそのまま読み取り範囲にする。
+ */
+let liveAutoDetect = true;
 /** オーバーレイに出す値。検出が一瞬途切れた保持フレームでも出し続ける。 */
 let lastReadingText = '?';
 
@@ -200,6 +207,7 @@ function applyMode(next: Mode): void {
   elements.liveReading.hidden = next !== 'live';
   elements.sourceCanvas.hidden = next !== 'still';
   elements.captureButton.hidden = next !== 'live';
+  elements.liveAutoButton.hidden = next !== 'live';
   elements.cameraSelect.hidden = next !== 'live';
   elements.resetButton.hidden = next !== 'still';
   elements.cameraButton.textContent =
@@ -328,13 +336,17 @@ function analyzeSelection(): void {
  * ライブ映像の 1 フレームを解析してオーバーレイを描き直す。
  *
  * プレビューは video 要素がそのまま映し続けるので、映像は描き直さない。
- * 手動 ROI はフレームサイズが自動調整で変わると絶対座標が破綻するため、
- * ライブ中は常に自動検出を使う。描画には平滑化した枠を使い、解析には
- * 生の検出枠を使う（平滑遅れを色帯読み取りに持ち込まない）。
+ * 描画には平滑化した枠を使い、解析には生の検出枠を使う（平滑遅れを
+ * 色帯読み取りに持ち込まない）。自動検出 OFF のときはガイド枠で読む。
  */
 function analyzeLiveFrame(frame: HTMLCanvasElement): void {
   source = frame;
   updateStickyBar();
+
+  if (!liveAutoDetect) {
+    analyzeGuideFrame(frame);
+    return;
+  }
 
   detectedBox = null;
   const roi = buildRoi(true);
@@ -347,11 +359,47 @@ function analyzeLiveFrame(frame: HTMLCanvasElement): void {
 }
 
 /**
+ * 自動検出 OFF のライブ経路。画面中央のガイド枠（抵抗器を模した水平の
+ * 赤い長方形）をそのまま検出枠として使い、利用者に抵抗器を枠へ合わせて
+ * もらう。カラーコードの読み取りも同じ枠で行うので、見えている枠と
+ * 解析範囲が常に一致する。枠は固定なので平滑化は通さない。
+ */
+function analyzeGuideFrame(frame: HTMLCanvasElement): void {
+  const context = context2d(frame, { willReadFrequently: true });
+  const full = context.getImageData(0, 0, frame.width, frame.height);
+  const image: RoiImage = { width: full.width, height: full.height, data: full.data };
+
+  const box = guideBox(visibleFrameRect(frame));
+  detectedBox = box;
+  statusParts.detection = 'ガイドに合わせて読み取り';
+  renderStatus();
+
+  const result = renderAnalysis(rectify(image, box, ROI_OPTIONS));
+  lastReadingText = formatReading(result.reading);
+  drawLiveOverlay(frame, box, result);
+}
+
+/**
+ * 解析フレームのうち、実際に画面へ出ている範囲。
+ *
+ * 映像は画面いっぱい（`object-fit: cover`）で出しているので、フレームの
+ * 左右または上下は切り落とされている。ガイド枠を画面外に置かないために
+ * 表示サイズから逆算する。
+ */
+function visibleFrameRect(frame: HTMLCanvasElement): ViewRect {
+  const display = elements.liveVideo.getBoundingClientRect();
+  return coverVisibleRect(
+    { width: frame.width, height: frame.height },
+    { width: display.width, height: display.height },
+  );
+}
+
+/**
  * ライブ用オーバーレイ。透明 canvas に枠・バンド・値だけを描く。
  *
  * canvas の内在解像度を毎回解析フレームに合わせるので、検出座標
  * （解析フレーム座標系）を変換なしでそのまま描ける。CSS 側は video と
- * 同じ矩形に引き伸ばされる（アスペクト比が同じなのでズレない）。
+ * 同じ `object-fit: cover` で切り取られる（縦横比が同じなのでズレない）。
  */
 function drawLiveOverlay(
   frame: HTMLCanvasElement,
@@ -797,6 +845,20 @@ elements.cameraButton.addEventListener('click', () => {
     return;
   }
   void beginCamera();
+});
+
+/**
+ * ライブの自動検出トグル。OFF にすると画面中央のガイド枠で読み取る。
+ * 静止画側の `#auto-toggle`（手動 ROI のドラッグ指定）とは別の操作。
+ */
+elements.liveAutoButton.addEventListener('click', () => {
+  liveAutoDetect = !liveAutoDetect;
+  elements.liveAutoButton.setAttribute('aria-pressed', String(liveAutoDetect));
+  // 検出方式が変わると枠が飛ぶので、平滑化の履歴は持ち越さない
+  smoother = createSmoother();
+  lastReadingText = '?';
+  statusParts.detection = '';
+  renderStatus();
 });
 
 elements.captureButton.addEventListener('click', () => {
