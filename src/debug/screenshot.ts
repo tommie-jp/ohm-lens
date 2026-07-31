@@ -79,6 +79,24 @@ export function screenshotFileName(now: Date): string {
   return `ohm-lens-${stamp}.jpg`;
 }
 
+/**
+ * canvas を JPEG の Blob にする。**同期**で作るのが要点。
+ *
+ * `toBlob` は非同期なので、待っている間にユーザー操作の文脈が切れて
+ * 共有シートやダウンロードを開けなくなる（iOS Safari で顕著）。
+ * `toDataURL` は同期なので、その場で Blob まで組み立てる。
+ */
+export function jpegBlob(canvas: HTMLCanvasElement, quality = 0.92): Blob {
+  const dataUrl = canvas.toDataURL('image/jpeg', quality);
+  const base64 = dataUrl.slice(dataUrl.indexOf(',') + 1);
+  const binary = atob(base64);
+  const bytes = new Uint8Array(binary.length);
+  for (let index = 0; index < binary.length; index += 1) {
+    bytes[index] = binary.charCodeAt(index);
+  }
+  return new Blob([bytes], { type: 'image/jpeg' });
+}
+
 export interface ComposeOptions {
   readonly video: HTMLVideoElement;
   readonly overlay: HTMLCanvasElement;

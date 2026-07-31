@@ -46,8 +46,9 @@ import { coverVisibleRect, pointerToCanvas, type Rect as ViewRect } from './view
 import { guideBox } from './guide.js';
 import { createCameraMenu } from './cameraMenu.js';
 import { pinchZoom, touchDistance } from './pinchZoom.js';
-import { composeScreenshot, screenshotFileName } from './screenshot.js';
-import { resolveSaveDirectory, saveBlob } from './saveTarget.js';
+import { composeScreenshot, jpegBlob, screenshotFileName } from './screenshot.js';
+import { saveImage, type SaveResult } from './saveTarget.js';
+import { playShutterSound } from './shutter.js';
 
 /**
  * Phase 0 の目視確認ツール。
@@ -71,6 +72,7 @@ const elements = {
   liveReadingNote: requireElement<HTMLSpanElement>('#live-reading-note'),
   liveAutoButton: requireElement<HTMLButtonElement>('#live-auto-button'),
   screenshotButton: requireElement<HTMLButtonElement>('#screenshot-button'),
+  shutterFlash: requireElement<HTMLDivElement>('#shutter-flash'),
   emptyError: requireElement<HTMLParagraphElement>('#empty-error'),
   cameraControls: requireElement<HTMLDivElement>('#camera-controls'),
   fileInput: requireElement<HTMLInputElement>('#file-input'),
@@ -888,33 +890,40 @@ function setPreviewZoom(zoom: number): void {
   elements.liveVideo.style.transform = value === 1 ? '' : `scale(${String(value)})`;
 }
 
-function canvasToJpeg(canvas: HTMLCanvasElement): Promise<Blob> {
-  return new Promise((resolve, reject) => {
-    canvas.toBlob(
-      (blob) => {
-        if (blob === null) reject(new Error('画像を書き出せませんでした'));
-        else resolve(blob);
-      },
-      'image/jpeg',
-      0.92,
-    );
-  });
+/** 撮れたことが分かるよう、画面を一瞬白く飛ばす。 */
+function flashShutter(): void {
+  const flash = elements.shutterFlash;
+  flash.classList.remove('flashing');
+  void flash.offsetWidth; // アニメーションを最初からやり直させる
+  flash.classList.add('flashing');
 }
+
+const SAVE_NOTICES: Record<SaveResult, (fileName: string) => string> = {
+  directory: (name) => `${name} を保存`,
+  share: (name) => `${name} を共有`,
+  download: (name) => `${name} をダウンロード`,
+  cancelled: () => '保存をやめました',
+};
 
 /**
  * 画面に見えているまま（映像 + 枠・バンド・値）を 1 枚に保存する。
  *
- * 保存先のフォルダは最初の 1 回だけ選んでもらい、以後は覚えたものを使う。
- * フォルダを選ぶダイアログはユーザー操作の文脈からしか開けないので、
- * 画像を作るより先に保存先を決める。
+ * **ここは非同期にしない。** 共有シートもダウンロードもフォルダ選択も
+ * 「ユーザー操作の文脈」からしか開けず、`await` を挟むと文脈が切れて
+ * 何も起きなくなる（iOS Safari で顕著）。だから画像を作るところまでは
+ * 同期で済ませ（`jpegBlob`）、保存の呼び出しまで一気に進む。
  */
-async function takeScreenshot(): Promise<void> {
+function takeScreenshot(): void {
   if (mode !== 'live' || source === null) return;
 
   const button = elements.screenshotButton;
   button.disabled = true;
+  playShutterSound();
+  flashShutter();
+
+  const fileName = screenshotFileName(new Date());
+  let blob: Blob;
   try {
-    const directory = await resolveSaveDirectory();
     const canvas = composeScreenshot({
       video: elements.liveVideo,
       overlay: elements.overlayCanvas,
@@ -922,20 +931,28 @@ async function takeScreenshot(): Promise<void> {
       visible: visibleFrameRect(source),
       zoom: previewZoom,
     });
-    const fileName = screenshotFileName(new Date());
-    const where = await saveBlob(await canvasToJpeg(canvas), fileName, directory);
-    showNotice(where === 'directory' ? `${fileName} を保存` : `${fileName} をダウンロード`);
+    blob = jpegBlob(canvas);
   } catch (error) {
     console.error(error);
-    showNotice(`保存できませんでした: ${String(error)}`);
-  } finally {
+    showNotice(`画像を作れませんでした: ${String(error)}`);
     button.disabled = false;
+    return;
   }
+
+  saveImage(blob, fileName)
+    .then((where) => {
+      showNotice(SAVE_NOTICES[where](fileName));
+    })
+    .catch((error: unknown) => {
+      console.error(error);
+      showNotice(`保存できませんでした: ${String(error)}`);
+    })
+    .finally(() => {
+      button.disabled = false;
+    });
 }
 
-elements.screenshotButton.addEventListener('click', () => {
-  void takeScreenshot();
-});
+elements.screenshotButton.addEventListener('click', takeScreenshot);
 
 /**
  * 2 本指のピンチで映像だけを拡大する。

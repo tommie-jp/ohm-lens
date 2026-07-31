@@ -257,6 +257,58 @@ body.live .stage::after {
   opacity: 0.85;
 }
 
+/*
+ * シャッターの演出。カメラアプリと同じく画面を一瞬白く飛ばす。
+ * 操作の邪魔をしないよう素通しにする。
+ */
+.shutter-flash {
+  position: absolute;
+  inset: 0;
+  z-index: 3;
+  background: #fff;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.shutter-flash.flashing {
+  animation: shutter-flash 320ms ease-out;
+}
+
+@keyframes shutter-flash {
+  0% {
+    opacity: 0;
+  }
+
+  12% {
+    opacity: 0.9;
+  }
+
+  100% {
+    opacity: 0;
+  }
+}
+
+/* 動きを抑える設定でも、撮れたことは分かるようにひかえめに光らせる */
+@media (prefers-reduced-motion: reduce) {
+  .shutter-flash.flashing {
+    animation-duration: 160ms;
+  }
+
+  @keyframes shutter-flash {
+    0% {
+      opacity: 0;
+    }
+
+    12% {
+      opacity: 0.5;
+    }
+
+    100% {
+      opacity: 0;
+    }
+  }
+}
+
 /* スクリーンショット: 右上のアイコンボタン（映像を隠さないよう記号だけ） */
 .screenshot-button {
   position: absolute;
