@@ -2,7 +2,8 @@ import type { Band } from '../types.js';
 import type { OrientedBox } from '../core/locate.js';
 import type { RectifyOptions } from '../core/rectify.js';
 import { bandCorners, labelAnchor, labelDirection, labelSide } from '../core/roiMapping.js';
-import { BAND_COLOR_JA, bandColorCss } from '../core/color/colors.js';
+import { BAND_COLOR_ABBR, BAND_COLOR_JA, bandColorCss } from '../core/color/colors.js';
+import { roleTextsFor } from '../core/value/jointDecode.js';
 
 /**
  * 検出結果を元の写真に焼き込む。
@@ -32,7 +33,7 @@ const LOW_CONFIDENCE = 0.35;
 export interface OverlayOptions {
   /** ROI を切り出したときと同じ設定。座標を正しく逆変換するために必要。 */
   readonly rectify: RectifyOptions;
-  /** 色名を日本語 1 文字で出す（既定）。false なら英字 3 文字。 */
+  /** 色名を日本語 1 文字で出す（既定）。false なら英字 3 文字の略号。 */
   readonly japanese?: boolean;
   /**
    * ラベルの文字サイズ [px]（描画先の座標系）。
@@ -40,6 +41,36 @@ export interface OverlayOptions {
    * 見た目の大きさを一定にしたいので、換算した値を渡す。
    */
   readonly textPx?: number;
+}
+
+/**
+ * 色名の先へ値をずらす量（文字サイズに対する割合）。
+ * 略号 3 文字ぶん + 間隔。位置で決め打つので、値の文字数が違っても揃う。
+ */
+const VALUE_GAP_RATIO = 2.6;
+
+/**
+ * 寝かせた文字を描く。どんな背景でも読めるよう白フチを付ける。
+ * `anchor` を先頭に、`angle` の向きへ伸ばす（開始位置を揃えるため左寄せ）。
+ */
+function drawSidewaysText(
+  context: CanvasRenderingContext2D,
+  anchor: { x: number; y: number },
+  angle: number,
+  text: string,
+  fillStyle: string,
+  fontPx: number,
+): void {
+  context.save();
+  context.translate(anchor.x, anchor.y);
+  context.rotate(angle);
+  context.textAlign = 'left';
+  context.lineWidth = Math.max(2, fontPx * 0.22);
+  context.strokeStyle = 'rgb(255 255 255 / 0.92)';
+  context.strokeText(text, 0, 0);
+  context.fillStyle = fillStyle;
+  context.fillText(text, 0, 0);
+  context.restore();
 }
 
 function drawPolygon(
@@ -104,6 +135,11 @@ export function drawBandLabels(
   // 注釈は水平な抵抗器なら下、垂直なら右に出す
   const side = labelSide(box);
   const direction = labelDirection(box);
+  // 注釈の向きへ回す角度。水平な抵抗器なら 90°＝文字は下へ伸び、文字の下
+  // （ベースライン側）が画面の左を向く
+  const angle = Math.atan2(direction.y, direction.x);
+  // 色列が表す意味（数字・倍率・許容差）。読み取り方向は core が決める
+  const roleTexts = roleTextsFor(bands.map((band) => band.color));
 
   context.save();
   context.font = `700 ${fontPx}px system-ui, sans-serif`;
@@ -127,35 +163,36 @@ export function drawBandLabels(
     context.fillStyle = BOX_COLOR;
     context.fillText(String(index + 1), numberAt.x, numberAt.y);
 
-    // ラベル: 全バンドで同じ位置から始める（バンドごとに段違いにしない）。
-    // 英語名は長いので、注釈を積む向きへ寝かせて縦に伸ばす。
-    const anchor = labelAnchor(box, options.rectify, band, baseOffset + fontPx * 1.4, side);
-    const text = (options.japanese ?? true) ? BAND_COLOR_JA[band.color] : band.color.toUpperCase();
+    // 色名とカラーコードの値。どちらも全バンドで同じ位置から始めるので、
+    // 隣り合うバンドどうしで縦に揃って読める（バンドごとの段違いはしない）。
+    // 注釈を積む向きへ寝かせて描く（水平な抵抗器なら文字は下へ伸びる）。
+    const nameAt = labelAnchor(box, options.rectify, band, baseOffset + fontPx * 1.4, side);
+    const valueAt = labelAnchor(
+      box,
+      options.rectify,
+      band,
+      baseOffset + fontPx * (1.4 + VALUE_GAP_RATIO),
+      side,
+    );
 
+    // 色玉（金/黄、灰/銀の取り違えを目で確かめられるように）。色名の手前に置く
     context.save();
-    context.translate(anchor.x, anchor.y);
-    // 注釈の向きへ回す。水平な抵抗器なら 90°＝文字は下へ伸び、文字の下
-    // （ベースライン側）が画面の左を向く
-    context.rotate(Math.atan2(direction.y, direction.x));
-    context.textAlign = 'left';
-
-    // 色玉（金/黄、灰/銀の取り違えを目で確かめられるように）。文字の手前に置く
-    const dot = fontPx * 0.32;
+    context.translate(nameAt.x, nameAt.y);
+    context.rotate(angle);
     context.beginPath();
-    context.arc(-fontPx * 0.55, 0, dot, 0, Math.PI * 2);
+    context.arc(-fontPx * 0.55, 0, fontPx * 0.32, 0, Math.PI * 2);
     context.fillStyle = bandColorCss(band.color);
     context.fill();
     context.strokeStyle = 'rgb(0 0 0 / 0.5)';
     context.lineWidth = 1;
     context.stroke();
-
-    // 文字: どんな背景でも読めるよう白フチ + 黒文字
-    context.lineWidth = Math.max(2, fontPx * 0.22);
-    context.strokeStyle = 'rgb(255 255 255 / 0.92)';
-    context.strokeText(text, 0, 0);
-    context.fillStyle = '#111';
-    context.fillText(text, 0, 0);
     context.restore();
+
+    const name = (options.japanese ?? true)
+      ? BAND_COLOR_JA[band.color]
+      : BAND_COLOR_ABBR[band.color];
+    drawSidewaysText(context, nameAt, angle, name, BOX_COLOR, fontPx);
+    drawSidewaysText(context, valueAt, angle, roleTexts[index] ?? '?', '#111', fontPx);
     context.globalAlpha = 1;
   });
 
