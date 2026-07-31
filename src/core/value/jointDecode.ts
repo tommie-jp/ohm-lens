@@ -1,5 +1,6 @@
 import type { BandColor, LabColor, ReadDirection, ResistorReading } from '../../types.js';
 import { rankBandColors } from '../bands/classify.js';
+import { deltaE76 } from '../color/colorSpace.js';
 import { DEFAULT_PALETTE, type Palette } from '../color/palette.js';
 import { clamp01 } from '../math.js';
 import {
@@ -57,6 +58,8 @@ export interface ConfidenceBreakdown {
   readonly margin: number;
   /** 金属色を数字として読み替えたことによる減点 0..1 */
   readonly plausibility: number;
+  /** バンド色の行方向のばらつき（ΔE2000 の最大）。測れなければ null */
+  readonly verticalSpread: number | null;
   /** 次点との素のコスト差。次点が無ければ null */
   readonly runnerUpGap: number | null;
   /** 次点の解釈が指す抵抗値。次点が無ければ null */
@@ -80,10 +83,33 @@ export interface JointRun {
   readonly lab: LabColor;
   readonly start: number;
   readonly end: number;
+  /** 位置からの推測で挿入したラン。詳細は `bands/runs.ts` の `ColorRun` を見る。 */
+  readonly metallicOnly?: boolean;
 }
 
 export interface JointOptions {
   readonly palette?: Palette;
+  /**
+   * バンド色の行方向のばらつき（`runScanSpreads` の最大値）。
+   *
+   * 与えると、大きいときに確信度を下げる（{@link VERTICAL_SPREAD_CONFIDENCE}）。
+   * 値の決定には使わない。
+   */
+  readonly verticalSpread?: number | null;
+  /**
+   * 抵抗器の本体色（`identifyBody` の代表色）。
+   *
+   * 与えると、本体に近いラン（ΔE76 ≤ {@link METALLIC_BODY_DELTA_E}）を
+   * **金属容疑**として扱う:
+   *
+   * - 色候補を金・銀に限る（カラーコード表の制約で数字にならない）
+   * - 捨てるコストを 0 にする（本数合わせで解釈を歪めない）
+   *
+   * 金・銀は本体と色相が同じで明度だけ違うため（`docs/11`）、色では数字
+   * バンドと区別できない。学習パレットの金属色はアンカー依存の二峰性で
+   * 棄却済み（`core/learning.ts`）。色ではなく位置づけで縛る。
+   */
+  readonly bodyLab?: LabColor | null;
 }
 
 /** ランごとに残す色候補の数。 */
@@ -144,6 +170,15 @@ const METALLIC_COLORS: ReadonlySet<BandColor> = new Set<BandColor>(['gold', 'sil
 /** 金属色を数字として読み替えた本数 1 本あたりの確信度の倍率。 */
 const METALLIC_DIGIT_CONFIDENCE = 0.5;
 
+/**
+ * 本体との ΔE76 がこれ以下のランを金属容疑とみなす。
+ *
+ * 人手で確定した境界での実測: 金は本体と 4.1〜10.8、肩の照り返しは 10.6〜11.2。
+ * いっぽう本体に最も近い**数字**バンドは灰の 14.7 で、色つきの数字は 26 以上。
+ * 11 と 14.7 の間に境界を置く。
+ */
+const METALLIC_BODY_DELTA_E = 12;
+
 /** スナップ偏差がこの値で適合スコアが尽きる（decode.ts と同じ水準）。 */
 const SNAP_DEVIATION_LIMIT = 0.02;
 
@@ -197,6 +232,30 @@ const GEOMETRY_CONFIDENCE = 0.7;
 /** 数字・倍率バンドの間隔の変動係数の上限。 */
 const CORE_GAP_CV_LIMIT = 0.4;
 
+/**
+ * バンド色が行方向にばらついているときの確信度の倍率。
+ *
+ * バンドは本体の全高にわたる縦縞なので、**どの走査線も同じ色を見ているはず**。
+ * 見ていないなら、鏡面反射で潰れているか、OBB の残留回転で行ごとに列位置が
+ * ずれているか、そもそもバンドではないものを見ている。色の近さ（ΔE）とも
+ * 次点とのマージンとも独立した情報で、`isGeometryNatural` と同じく
+ * **読みの当否そのものを疑う**ものなのでコストではなく確信度に掛ける。
+ *
+ * 実測（`scripts/dbgScanSpread.ts`）では、ばらつきの最大値が誤答で中央 15.2
+ * （最小 6.3）、正解で中央 5.5。**分布は重なる**ので単独では分離できないが、
+ * 確信度の倍率としてなら差し引きが合う。しきい値 6・倍率 0.74 で
+ * **誤答 5 → 2、正解は 32 のまま**（保留 11 → 14）。
+ *
+ * 平坦域（正解 32）は**しきい値 5〜6**で、その内側を採った。しきい値 4 以下は
+ * 正解が落ち（31）、7 以上は誤答が 3 に増える。倍率は 0.70 で正解が 31 に落ち、
+ * 0.74 以上は平坦。**しきい値の平坦域が 2 段ぶんしかない**ので、検体を足したら
+ * 取り直すこと。詳細は `docs/14-走査線の多重化を測った結果.md`。
+ */
+const VERTICAL_SPREAD_CONFIDENCE = 0.74;
+
+/** バンド色の行方向のばらつきがこれを超えたら減点する（ΔE2000）。 */
+const VERTICAL_SPREAD_LIMIT = 6;
+
 /** 許容差バンドの手前の間隔が、数字・倍率の間隔の何倍までなら自然か。 */
 const TOLERANCE_GAP_RATIO_LIMIT = 4;
 
@@ -244,9 +303,103 @@ function rolesFor(colors: readonly BandColor[]): { role: BandRole; roleText: str
   });
 }
 
-/** 倍率を ×10 / ×0.01 のように読める形にする。 */
+/**
+ * 色列を読み取り方向へ並べ替える。期待値の表で使う。
+ *
+ * `boundaries.json` の色列は画像上の並び（左から右）なので、そのままでは
+ * 読み取り方向が分からない。`46-82kohm` は画像上 gold-orange-red-grey で、
+ * この向きでは gold が数字バンドに来て**デコードできない**（IEC 60062 では
+ * 金は倍率と許容差だけ）。逆向きなら grey-red-orange-gold = 82kΩ ±5% になる。
+ *
+ * そこで**デコードが成立する向き**を選ぶ。両方成立する／どちらも成立しない
+ * ときは入力の向きを使う（判断できないときに黙って倒れる）。
+ *
+ * 色が 1 つでも確定していない、または本数が足りなければ null。
+ */
+function orientedFor(
+  colors: readonly (BandColor | null)[],
+): { readonly oriented: readonly BandColor[]; readonly useReversed: boolean } | null {
+  const known = colors.filter((color): color is BandColor => color !== null);
+  if (known.length !== colors.length || colors.length < MIN_BANDS) return null;
+
+  const reversed = [...known].reverse();
+  const useReversed = decodeBandSequence(known) === null && decodeBandSequence(reversed) !== null;
+
+  return { oriented: useReversed ? reversed : known, useReversed };
+}
+
+/**
+ * 色列を**読み取り方向を選んで**役割の文字列に直す。期待値の表で使う。
+ *
+ * 返す配列は**入力と同じ並び**（画像上の並び）なので、表の列とそのまま対応する。
+ * 向きの決め方は {@link orientedFor} を参照。
+ */
+export function roleTextsFor(colors: readonly (BandColor | null)[]): string[] {
+  const chosen = orientedFor(colors);
+  if (chosen === null) return colors.map(() => '?');
+
+  const roles = rolesFor(chosen.oriented);
+  return colors.map((_, index) => {
+    const at = chosen.useReversed ? colors.length - 1 - index : index;
+    return (roles[at] as { roleText: string }).roleText;
+  });
+}
+
+/**
+ * 色列が表す抵抗値 [Ω]。デコードできなければ null。
+ *
+ * 期待値の表の見出しに「その色列なら何Ωか」を添えるために使う。
+ * **向きの選び方は {@link roleTextsFor } と同じ**（同じ `orientedFor` を通す）。
+ * 別々に決めると、表の意味の行と見出しの値が食い違う。
+ *
+ * 返すのは **E系列へスナップする前**の値。スナップは読み取りの揺れを丸めるため
+ * の推測であって、人手で確定した色列には要らない。`15-339ohm` の
+ * 橙-橙-白-黒（339Ω）がスナップで 340Ω になると、正解のはずのラベルが
+ * 期待値と食い違って見える。
+ */
+export function decodedOhmsFor(colors: readonly (BandColor | null)[]): number | null {
+  const chosen = orientedFor(colors);
+  if (chosen === null) return null;
+
+  return decodeBandSequence(chosen.oriented)?.rawOhms ?? null;
+}
+
+/** 上付きの数字（指数表記に使う）。 */
+const SUPERSCRIPT: Record<string, string> = {
+  '0': '⁰',
+  '1': '¹',
+  '2': '²',
+  '3': '³',
+  '4': '⁴',
+  '5': '⁵',
+  '6': '⁶',
+  '7': '⁷',
+  '8': '⁸',
+  '9': '⁹',
+  '-': '⁻',
+};
+
+/**
+ * 倍率を ×10⁸ / ×10⁻² のような指数表記にする。
+ *
+ * カラーコードの倍率は必ず 10 のべき乗なので、指数で書けば桁数によらず
+ * 幅が一定になる。`×100,000,000` のような桁の羅列は表の列幅（58px）に
+ * 収まらず、隣の列と重なっていた。
+ *
+ * ×1 と ×10 はそのまま書く（×10⁰ / ×10¹ より読みやすい）。
+ */
 function formatMultiplier(multiplier: number): string {
-  return `×${multiplier >= 1 ? multiplier.toLocaleString('en-US') : String(multiplier)}`;
+  if (multiplier === 1) return '×1';
+  if (multiplier === 10) return '×10';
+
+  const exponent = Math.round(Math.log10(multiplier));
+  // 10 のべき乗でない値は来ない想定だが、来たら桁でそのまま出す
+  if (!Number.isFinite(exponent) || 10 ** exponent !== multiplier) {
+    return `×${multiplier >= 1 ? multiplier.toLocaleString('en-US') : String(multiplier)}`;
+  }
+
+  const digits = [...String(exponent)].map((char) => SUPERSCRIPT[char] ?? char).join('');
+  return `×10${digits}`;
 }
 
 /**
@@ -337,6 +490,19 @@ function candidatesFor(run: JointRun, palette: Palette): Candidate[] {
   return ranked.filter((candidate) => candidate.deltaE <= best + CANDIDATE_DELTA_MARGIN);
 }
 
+/**
+ * 金属容疑のランの色候補。金・銀だけに限る。
+ *
+ * カラーコード表の制約（金・銀は数字にならない）と組み合わさって、
+ * このランは倍率・許容差にしかなれなくなる。数字が要る位置に来たら
+ * 解釈自体が成立しないので、タダで捨てる側に倒れる。
+ */
+function metallicCandidatesFor(run: JointRun, palette: Palette): Candidate[] {
+  return rankBandColors(run.lab, palette.entries.length, palette).filter((candidate) =>
+    METALLIC_COLORS.has(candidate.color),
+  );
+}
+
 /** 幅の広い順に上位を残す（元の並び順は保つ）。 */
 function capRuns(runs: readonly JointRun[]): JointRun[] {
   if (runs.length <= MAX_RUNS_CONSIDERED) return [...runs];
@@ -350,13 +516,21 @@ function capRuns(runs: readonly JointRun[]): JointRun[] {
   return widths.map((index) => runs[index] as JointRun);
 }
 
-/** 保持するランの組み合わせ（ビットマスク）を列挙する。 */
-function keepMasks(count: number): number[] {
+/**
+ * 保持するランの組み合わせ（ビットマスク）を列挙する。
+ *
+ * 金属容疑のラン（`freeDrop`）は落としても本数制限に数えない。
+ * 金・銀か肩の照り返しなので、無いものとして扱っても解釈は歪まない。
+ */
+function keepMasks(count: number, freeDrop: readonly boolean[]): number[] {
   const masks: number[] = [];
   for (let mask = 0; mask < 1 << count; mask += 1) {
     let kept = 0;
-    for (let bit = 0; bit < count; bit += 1) if ((mask & (1 << bit)) !== 0) kept += 1;
-    const dropped = count - kept;
+    let dropped = 0;
+    for (let bit = 0; bit < count; bit += 1) {
+      if ((mask & (1 << bit)) !== 0) kept += 1;
+      else if (freeDrop[bit] !== true) dropped += 1;
+    }
     if (kept >= MIN_BANDS && kept <= MAX_BANDS && dropped <= MAX_DROPPED_RUNS) masks.push(mask);
   }
   return masks;
@@ -375,7 +549,17 @@ export function jointReadResistor(
 
   const palette = options.palette ?? DEFAULT_PALETTE;
   const capped = capRuns(runs);
-  const candidates = capped.map((run) => candidatesFor(run, palette));
+  const bodyLab = options.bodyLab ?? null;
+  // 本体に近いランは金属容疑（金・銀か肩の照り返し）。数字にしない・タダで捨てる。
+  // 位置からの推測で挿入したランは、色が何であれ無条件に同じ扱いにする
+  const bodyLike = capped.map(
+    (run) =>
+      run.metallicOnly === true ||
+      (bodyLab !== null && deltaE76(run.lab, bodyLab) <= METALLIC_BODY_DELTA_E),
+  );
+  const candidates = capped.map((run, index) =>
+    bodyLike[index] === true ? metallicCandidatesFor(run, palette) : candidatesFor(run, palette),
+  );
   const totalWidth = capped.reduce((sum, run) => sum + (run.end - run.start), 0);
 
   const decodeCache = new Map<string, DecodedValue | null>();
@@ -407,13 +591,14 @@ export function jointReadResistor(
     }
   };
 
-  for (const mask of keepMasks(capped.length)) {
+  for (const mask of keepMasks(capped.length, bodyLike)) {
     const keptIndices: number[] = [];
     let droppedWidth = 0;
     for (let bit = 0; bit < capped.length; bit += 1) {
       const run = capped[bit] as JointRun;
       if ((mask & (1 << bit)) !== 0) keptIndices.push(bit);
-      else droppedWidth += run.end - run.start;
+      // 金属容疑はタダで捨てられる（幅をコストに入れない）
+      else if (bodyLike[bit] !== true) droppedWidth += run.end - run.start;
     }
 
     const dropCost = DROP_COST_SCALE * (droppedWidth / Math.max(1, totalWidth));
@@ -490,7 +675,14 @@ export function jointReadResistor(
   )
     ? 1
     : GEOMETRY_CONFIDENCE;
-  const plausibility = METALLIC_DIGIT_CONFIDENCE ** chosen.metallicDigits * geometry;
+  // 行方向にばらついているなら、色がどれだけ近くても見ているものを疑う
+  const verticalSpread = options.verticalSpread ?? null;
+  const vertical =
+    verticalSpread !== null && verticalSpread > VERTICAL_SPREAD_LIMIT
+      ? VERTICAL_SPREAD_CONFIDENCE
+      : 1;
+  const plausibility =
+    METALLIC_DIGIT_CONFIDENCE ** chosen.metallicDigits * geometry * vertical;
   const confidence = clamp01(absolute * (0.4 + 0.6 * margin) * plausibility);
 
   // 採用した解釈を「画像上の並び順」に戻す。rtl のときは役割が末尾から付く。
@@ -523,6 +715,7 @@ export function jointReadResistor(
       absolute,
       margin,
       plausibility,
+      verticalSpread,
       runnerUpGap: runnerUp === null ? null : runnerUp.cost - chosen.cost,
       runnerUpOhms: runnerUp === null ? null : runnerUp.decoded.ohms,
       runnerUpSameValue:

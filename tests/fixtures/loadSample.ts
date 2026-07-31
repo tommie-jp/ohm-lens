@@ -30,6 +30,38 @@ export interface SampleEntry {
   /** 実物のバンド列が判明している場合のみ */
   readonly bands: readonly string[] | null;
   readonly source: string;
+  /**
+   * 基準色の較正（`calibrate.test.ts`）の教師データに使ってよいか。
+   *
+   * バンド列が確定していない検体を学習に入れると、誤った対応付けが
+   * そのまま基準色に混ざる。しかも `bands` を消すだけでは足りない。
+   * 較正は「人手ラベル → `bands` → **期待値からの逆算**」の順に候補を
+   * 作るので、期待値さえあれば学習に入ってしまうため。
+   */
+  readonly calibrate: boolean;
+}
+
+/**
+ * 較正の教師データに使ってよいエントリか。
+ *
+ * 既定は true。出典から推定しただけでバンド列を人が確認していない検体は
+ * MANIFEST に `"calibrate": false` を書いて外す。
+ */
+export function isTrainable(entry: SampleEntry): boolean {
+  return entry.calibrate;
+}
+
+/**
+ * MANIFEST にあるのに実体が無いエントリのファイル名を挙げる。
+ *
+ * sample/ は切り出しが甘い検体を手で消す運用なので、消し忘れたエントリが
+ * 残る。`scripts/syncManifest.ts` がこれを使って掃除する。
+ */
+export function staleManifestEntries(
+  manifest: readonly { readonly file: string }[],
+  present: ReadonlySet<string>,
+): string[] {
+  return manifest.map((item) => item.file).filter((file) => !present.has(file));
 }
 
 /** sample/ の場所（焼き込み出力などで元画像のパスが要る場合に使う）。 */
@@ -49,6 +81,7 @@ export function loadManifest(): SampleEntry[] {
     expected: { ohms: number; tolerance: number | null } | null;
     bands?: string[];
     source?: string;
+    calibrate?: boolean;
   }[];
 
   return items
@@ -59,6 +92,7 @@ export function loadManifest(): SampleEntry[] {
       tolerance: (item.expected as { tolerance: number | null }).tolerance,
       bands: item.bands ?? null,
       source: item.source ?? 'commons',
+      calibrate: item.calibrate ?? true,
     }));
 }
 

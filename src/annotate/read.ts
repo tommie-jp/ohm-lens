@@ -3,7 +3,7 @@ import { locateResistor, type OrientedBox } from '../core/locate.js';
 import { rectify } from '../core/rectify.js';
 import { refineBoxExtent } from '../core/refine.js';
 import { analyzeOptions, refineOptions, ROI_OPTIONS } from '../core/settings.js';
-import { formatConfidence, formatOhms, isReportable } from '../core/format.js';
+import { formatConfidence, formatOhms, isReadableSize, isReportable } from '../core/format.js';
 import { jointReadResistor, type JointReading } from '../core/value/jointDecode.js';
 import { DEFAULT_PALETTE, type Palette } from '../core/color/palette.js';
 import type { RoiImage } from '../core/bands/profile.js';
@@ -40,6 +40,11 @@ export interface ReadResult {
   /** 役割つきの解釈。バンドが足りなければ null。 */
   readonly joint: JointReading | null;
   readonly ohms: number | null;
+  /**
+   * 検出枠が読める解像度に達しているか（`isReadableSize`）。
+   * 足りないときは値を出さない（`ohms` は null、確信度は 0）。
+   */
+  readonly readable: boolean;
   readonly confidence: number;
   /**
    * 確信度が閾値を超えていて、値として出してよいか。
@@ -59,6 +64,7 @@ function notLocated(): ReadResult {
     analysis: null,
     joint: null,
     ohms: null,
+    readable: false,
     confidence: 0,
     confident: false,
     correct: false,
@@ -80,13 +86,18 @@ export function readResistorImage(image: RoiImage, options: ReadOptions = {}): R
   const box = refineBoxExtent(located, image, refineOptions(palette));
   const roi = rectify(image, box, ROI_OPTIONS);
   const analysis = analyzeRoi(roi, analyzeOptions(box, palette));
-  // 役割つきの解釈が要るので、同じランで joint デコードを取り直す
-  const joint = jointReadResistor(
-    analysis.runs.map((run) => ({ lab: run.lab, start: run.start, end: run.end })),
-    { palette },
-  );
+  // 役割つきの解釈が要るので、同じランで joint デコードを取り直す。
+  // **同じ条件で呼ぶこと** — 確信度が analysis 側とずれるとレポートが二枚舌になる
+  const joint = jointReadResistor(analysis.runs, {
+    palette,
+    verticalSpread: analysis.verticalSpread,
+    bodyLab: analysis.bodyLab,
+  });
 
-  const ohms = analysis.reading?.ohms ?? null;
+  // 読める解像度に達していない枠からは値を出さない。バンド 1 本が数画素しか
+  // ない枠を rectify が拡大しても情報は増えず、当たっていても偶然になる
+  const readable = isReadableSize(box);
+  const ohms = readable ? (analysis.reading?.ohms ?? null) : null;
   const expected = options.expectedOhms;
 
   return {
@@ -96,8 +107,9 @@ export function readResistorImage(image: RoiImage, options: ReadOptions = {}): R
     analysis,
     joint,
     ohms,
-    confidence: analysis.reading?.confidence ?? 0,
-    confident: isReportable(analysis.reading ?? null),
+    readable,
+    confidence: readable ? (analysis.reading?.confidence ?? 0) : 0,
+    confident: readable && isReportable(analysis.reading ?? null),
     correct:
       expected !== undefined && ohms !== null && Math.abs(ohms - expected) / expected < VALUE_TOLERANCE,
   };
@@ -114,6 +126,32 @@ export type Verdict = 'correct' | 'wrong' | 'held';
 export function verdictOf(result: ReadResult): Verdict {
   if (result.ohms === null || !result.confident) return 'held';
   return result.correct ? 'correct' : 'wrong';
+}
+
+/**
+ * ラン数が正解と合っているか。
+ *
+ * 値が当たっているかとは別の指標。値が保留でも本数が合っていれば分割は
+ * 正しく、逆に本数が違えば値が当たっていても偶然を疑う。
+ * 検出できなかった写真は 0 本として `fewer` に入れる（別勘定にすると
+ * 3 つの合計が枚数と合わなくなる）。
+ */
+export type RunVerdict = 'same' | 'fewer' | 'more';
+
+export function runVerdict(detected: number, expected: number): RunVerdict {
+  if (detected === expected) return 'same';
+  return detected < expected ? 'fewer' : 'more';
+}
+
+/**
+ * 「32(74%)」のように件数と割合を並べる。
+ *
+ * 母数が 0 のときは割合を書かない。0% と書くと「測ったが 0 だった」に
+ * 見えるが、実際は測れていない。
+ */
+export function formatShare(part: number, whole: number): string {
+  if (whole <= 0) return `${part}(-)`;
+  return `${part}(${((part / whole) * 100).toFixed(0)}%)`;
 }
 
 /** 進捗表示・集計用の 1 行。`summary.txt` と同じ書式。 */

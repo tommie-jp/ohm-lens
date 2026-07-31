@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { segmentBands } from '../../src/core/bands/segment.js';
+import { bandRuns, bandRunStages, segmentBands } from '../../src/core/bands/segment.js';
 import { srgb255ToLab } from '../../src/core/color/colorSpace.js';
 import { BODY_REFERENCE_COLORS } from '../../src/core/color/colors.js';
 import type { ProfileSample } from '../../src/types.js';
@@ -215,5 +215,68 @@ describe('segmentBands', () => {
     // Act / Assert: 閾値を広げれば本体として吸収され、絞ればバンドになる
     expect(segmentBands(profile, { edgeDeltaE: 1, clusterDeltaE: 20 })).toEqual([]);
     expect(segmentBands(profile, { edgeDeltaE: 1, clusterDeltaE: 0.5 })).toHaveLength(1);
+  });
+});
+
+describe('bandRunStages', () => {
+  it('最終段は bandRuns と一致する（診断が本番と同じ道を通る）', () => {
+    // Arrange
+    const profile = profileOf([
+      [null, 10],
+      [RED, 5],
+      [null, 4],
+      [VIOLET, 5],
+      [null, 4],
+      [GREEN, 5],
+      [null, 10],
+    ]);
+    const options = { edgeDeltaE: 20, clusterDeltaE: 24 };
+
+    // Act
+    const stages = bandRunStages(profile, options);
+
+    // Assert
+    expect(stages.trimmed).toEqual(bandRuns(profile, options));
+  });
+
+  it('段階を追うごとにランは減る（増える段は無い）', () => {
+    // Arrange
+    const profile = profileOf([
+      [null, 10],
+      [RED, 5],
+      [null, 4],
+      [VIOLET, 5],
+      [null, 4],
+      [GREEN, 5],
+      [null, 10],
+    ]);
+
+    // Act
+    const stages = bandRunStages(profile, { edgeDeltaE: 20, clusterDeltaE: 24 });
+
+    // Assert
+    expect(stages.split.length).toBeGreaterThanOrEqual(stages.afterBody.length);
+    expect(stages.afterBody.length).toBeGreaterThanOrEqual(stages.merged.length);
+    expect(stages.merged.length).toBeGreaterThanOrEqual(stages.trimmed.length);
+  });
+
+  it('本体のランは body 除去の段で落ちる', () => {
+    // Arrange: 本体が大半を占め、バンドは 3 本
+    const profile = profileOf([
+      [null, 10],
+      [RED, 5],
+      [null, 4],
+      [VIOLET, 5],
+      [null, 4],
+      [GREEN, 5],
+      [null, 10],
+    ]);
+
+    // Act
+    const stages = bandRunStages(profile, { edgeDeltaE: 20, clusterDeltaE: 24 });
+
+    // Assert
+    expect(stages.split.length).toBeGreaterThan(stages.afterBody.length);
+    expect(stages.afterBody).toHaveLength(3);
   });
 });

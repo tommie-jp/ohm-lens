@@ -1,10 +1,12 @@
 import { describe, expect, it } from 'vitest';
 import {
+  MIN_READABLE_THICKNESS,
+  MIN_REPORTABLE_CONFIDENCE,
   formatConfidence,
   formatOhms,
   formatReading,
+  isReadableSize,
   isReportable,
-  MIN_REPORTABLE_CONFIDENCE,
 } from '../../src/core/format.js';
 import type { ResistorReading } from '../../src/types.js';
 
@@ -100,5 +102,35 @@ describe('formatConfidence', () => {
 
   it('数値でなければ ?', () => {
     expect(formatConfidence(Number.NaN)).toBe('?');
+  });
+});
+
+/**
+ * 読める解像度の下限（docs/14 §6）。
+ *
+ * 48 枚の実測では正解の最小の太さが 54px で、それ未満は 1 枚も正解していない。
+ * 太さ 12px の枠ではバンド 1 本が 3px しかなく、rectify がそれを拡大しても
+ * 情報は増えない。検出の誤りではないので locate は素直に返し、値を出すか
+ * どうかをこちらで決める。
+ */
+describe('isReadableSize', () => {
+  it('十分な太さの枠は読める', () => {
+    expect(isReadableSize({ thickness: 54 })).toBe(true);
+    expect(isReadableSize({ thickness: MIN_READABLE_THICKNESS })).toBe(true);
+  });
+
+  it('太さが足りない枠は読めない', () => {
+    expect(isReadableSize({ thickness: MIN_READABLE_THICKNESS - 1 })).toBe(false);
+    expect(isReadableSize({ thickness: 4 })).toBe(false);
+    expect(isReadableSize({ thickness: 25 })).toBe(false);
+  });
+
+  it('枠が無ければ読めない', () => {
+    expect(isReadableSize(null)).toBe(false);
+  });
+
+  it('下限は呼び出し側で変えられる（掃引のため）', () => {
+    expect(isReadableSize({ thickness: 20 }, 10)).toBe(true);
+    expect(isReadableSize({ thickness: 20 }, 30)).toBe(false);
   });
 });

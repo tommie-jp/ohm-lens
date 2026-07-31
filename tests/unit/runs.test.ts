@@ -342,3 +342,54 @@ describe('identifyBody — 金・銀のように本体と色相が同じバン�
     expect(body?.runIndices).toHaveLength(runs.length);
   });
 });
+
+describe('splitRuns の明度マージン', () => {
+  /**
+   * 金・銀のバンドは本体と**色相が同じで明度だけ違う**。実写 19 枚で測ると
+   * 本体との ΔE76 は 4〜11 しかなく、切れ目のしきい値 20 にまるで届かない。
+   * ΔE では切れないので、明度の落ち込みを別の基準として持つ。
+   */
+
+  /** 本体色から明度だけを下げた色（金バンドの見え方に相当）。 */
+  function darker(sample: ProfileSample, drop: number): ProfileSample {
+    return { x: sample.x, lab: { ...sample.lab, l: sample.lab.l - drop } };
+  }
+
+  function bodyWithDip(drop: number): ProfileSample[] {
+    const body = profileOf([[BODY_SRGB.beige, 20]]);
+    return body.map((sample, index) => (index >= 8 && index < 12 ? darker(sample, drop) : sample));
+  }
+
+  it('ΔE がしきい値に届かなくても、明度が落ち込む位置で切る', () => {
+    // Arrange: L が 8 下がるだけの区間。ΔE76 も 8 なので edgeDeltaE 20 では切れない
+    const profile = bodyWithDip(8);
+
+    // Act
+    const withoutMargin = splitRuns(profile, { edgeDeltaE: 20 });
+    const withMargin = splitRuns(profile, { edgeDeltaE: 20, lightnessMargin: 5 });
+
+    // Assert
+    expect(withoutMargin).toHaveLength(1);
+    expect(withMargin.map((run) => [run.start, run.end])).toEqual([
+      [0, 8],
+      [8, 12],
+      [12, 20],
+    ]);
+  });
+
+  it('指定しなければ従来どおり明度では切らない', () => {
+    // Arrange
+    const profile = bodyWithDip(8);
+
+    // Act / Assert
+    expect(splitRuns(profile, { edgeDeltaE: 20 })).toHaveLength(1);
+  });
+
+  it('マージンより浅い落ち込みでは切らない', () => {
+    // Arrange
+    const profile = bodyWithDip(3);
+
+    // Act / Assert
+    expect(splitRuns(profile, { edgeDeltaE: 20, lightnessMargin: 5 })).toHaveLength(1);
+  });
+});

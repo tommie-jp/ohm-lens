@@ -29,6 +29,14 @@ export interface ColorRun {
   readonly end: number;
   /** 構成サンプルの Lab 中央値 */
   readonly lab: LabColor;
+  /**
+   * 位置からの推測で中間に挿入したラン（`bands/recover.ts` の
+   * `recoverFromGap`）。デコーダは金・銀に限って解釈する。
+   *
+   * 本体ランに飲み込まれるほど本体色に近かったものなので、金・銀か肩の
+   * 照り返し以外ではありえない。数字として読ませると桁が直接壊れる。
+   */
+  readonly metallicOnly?: boolean;
 }
 
 export interface SplitRunsOptions {
@@ -36,6 +44,18 @@ export interface SplitRunsOptions {
   readonly edgeDeltaE?: number;
   /** これ未満の長さのランはノイズとして捨てる */
   readonly minRunLength?: number;
+  /**
+   * ランの平均から**明度だけ**がこれ以上離れたら切れ目とみなす。
+   *
+   * 金・銀のバンドは本体と色相が同じで明度だけ違うため、ΔE の切れ目には
+   * かからない。本体との ΔE76 は実測 4〜11 で `edgeDeltaE` の 20 に遠く届かず、
+   * **ランとして切られないまま本体に溶けていた**（人手で確定した 21 枚・
+   * バンド 89 本で、失われた 15 本のうち 14 本が分割の段階で消え、13 本が金）。
+   *
+   * **既定は無効。有効にすると分割は直るが誤答が増える**（`docs/13` §11）。
+   * 掃引で使う値は `core/settings.ts` が渡す。
+   */
+  readonly lightnessMargin?: number;
 }
 
 export interface BodyIdentification {
@@ -50,6 +70,9 @@ export interface BodyIdentification {
 const DEFAULT_EDGE_DELTA_E = 9;
 const DEFAULT_MIN_RUN_LENGTH = 2;
 
+/** 明度による切れ目の既定。無効（実測で決めた値は `core/settings.ts` が渡す）。 */
+const DEFAULT_LIGHTNESS_MARGIN = Number.POSITIVE_INFINITY;
+
 /** 同じ色のランとみなす ΔE。本体ランをまとめるのに使う。 */
 const DEFAULT_CLUSTER_DELTA_E = 18;
 
@@ -58,12 +81,19 @@ const DEFAULT_BODY_LIGHTNESS_WEIGHT = 1;
 
 /**
  * 前後のランに対してこれ以上明度が凹んで（盛り上がって）いれば、
- * 陰影ではなくバンドとみなす。
+ * 陰影ではなくバンドとみなす。実測で決めた値は `core/settings.ts` が渡す。
  */
-const LIGHTNESS_EXTREMUM_MARGIN = 12;
+const DEFAULT_LIGHTNESS_EXTREMUM_MARGIN = 12;
 
-/** 凹凸のあるランを本体に取り込むときの、しきい値の絞り込み。 */
-const EXTREMUM_CLUSTER_TOLERANCE = 0.85;
+/**
+ * 凹凸のあるランを本体に取り込むときの、しきい値の絞り込み。
+ *
+ * 0.85 では**絞りが足りない**。金の凹みは本体との距離が 4〜11 しかなく、
+ * 0.85 × clusterΔE24 = 20.4 より依然近いため吸収されたままだった
+ * （凹みとして検出できても本数が 1 本も増えなかった理由）。
+ * 実測で決めた値は `core/settings.ts` が渡す。
+ */
+const DEFAULT_EXTREMUM_CLUSTER_TOLERANCE = 0.85;
 
 function medianLab(samples: readonly ProfileSample[]): LabColor {
   const pick = (select: (sample: ProfileSample) => number): number => {
@@ -82,6 +112,7 @@ export function splitRuns(
 ): ColorRun[] {
   const edgeDeltaE = options.edgeDeltaE ?? DEFAULT_EDGE_DELTA_E;
   const minRunLength = options.minRunLength ?? DEFAULT_MIN_RUN_LENGTH;
+  const lightnessMargin = options.lightnessMargin ?? DEFAULT_LIGHTNESS_MARGIN;
   if (profile.length === 0) return [];
 
   const runs: ColorRun[] = [];
@@ -113,7 +144,14 @@ export function splitRuns(
   };
 
   for (const sample of profile) {
-    if (current.length > 0 && deltaE76(sample.lab, mean()) > edgeDeltaE) flush();
+    if (current.length > 0) {
+      const reference = mean();
+      // 色が変わったか、明度だけが離れたか。金・銀は後者でしか捕まらない。
+      const cut =
+        deltaE76(sample.lab, reference) > edgeDeltaE ||
+        Math.abs(sample.lab.l - reference.l) > lightnessMargin;
+      if (cut) flush();
+    }
     push(sample);
   }
   flush();
@@ -153,6 +191,7 @@ function isBodyLightnessExtremum(
   index: number,
   seedLab: LabColor,
   clusterDeltaE: number,
+  extremumMargin: number,
 ): boolean {
   const previous = runs[index - 1];
   const next = runs[index + 1];
@@ -168,8 +207,8 @@ function isBodyLightnessExtremum(
   const fromPrevious = (runs[index] as ColorRun).lab.l - previous.lab.l;
   const fromNext = (runs[index] as ColorRun).lab.l - next.lab.l;
   return (
-    (fromPrevious < -LIGHTNESS_EXTREMUM_MARGIN && fromNext < -LIGHTNESS_EXTREMUM_MARGIN) ||
-    (fromPrevious > LIGHTNESS_EXTREMUM_MARGIN && fromNext > LIGHTNESS_EXTREMUM_MARGIN)
+    (fromPrevious < -extremumMargin && fromNext < -extremumMargin) ||
+    (fromPrevious > extremumMargin && fromNext > extremumMargin)
   );
 }
 
@@ -180,11 +219,14 @@ function isBodyLightnessExtremum(
  * 合計幅が最大のグループを本体とする。基準色テーブルには依存しない。
  *
  * @param lightnessWeight 本体クラスタでの明度の重み。1 で従来どおり。
+ * @param extremumMargin 前後よりこれ以上明度が凹んでいればバンドとみなす
  */
 export function identifyBody(
   runs: readonly ColorRun[],
   clusterDeltaE = DEFAULT_CLUSTER_DELTA_E,
   lightnessWeight = DEFAULT_BODY_LIGHTNESS_WEIGHT,
+  extremumMargin = DEFAULT_LIGHTNESS_EXTREMUM_MARGIN,
+  extremumTolerance = DEFAULT_EXTREMUM_CLUSTER_TOLERANCE,
 ): BodyIdentification | null {
   if (runs.length === 0) return null;
 
@@ -233,10 +275,10 @@ export function identifyBody(
     .map((_, index) => index)
     .filter((index) => {
       // 明度が局所的に凹んでいるランは陰影ではないので、明度の緩和を効かせない
-      const extremum = isBodyLightnessExtremum(runs, index, seedLab, clusterDeltaE);
+      const extremum = isBodyLightnessExtremum(runs, index, seedLab, clusterDeltaE, extremumMargin);
       return (
         bodyDistance((runs[index] as ColorRun).lab, seedLab, extremum ? 1 : lightnessWeight) <=
-        clusterDeltaE * (extremum ? EXTREMUM_CLUSTER_TOLERANCE : 1)
+        clusterDeltaE * (extremum ? extremumTolerance : 1)
       );
     });
 

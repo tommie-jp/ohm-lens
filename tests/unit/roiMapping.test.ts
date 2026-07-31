@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   bandCorners,
   bodyColumns,
+  bodyRows,
   imageToRoi,
   labelAnchor,
   labelSide,
@@ -243,6 +244,55 @@ describe('bodyColumns', () => {
     // Assert
     expect(columns.start).toBe(0);
     expect(columns.end).toBe(geometry.width);
+  });
+});
+
+describe('bodyRows', () => {
+  it('パディングなしなら ROI 全体が本体', () => {
+    // Arrange / Act
+    const rows = bodyRows(BOX, {});
+
+    // Assert
+    expect(rows.start).toBe(0);
+    expect(rows.end).toBe(40);
+  });
+
+  it('本番の条件では本体は ROI 高さの中央 64%（両端は本体の外）', () => {
+    // Arrange: settings.ts と同じ padding 0.28 / targetHeight 40
+    const options = { padding: 0.28, targetHeight: 40 };
+
+    // Act
+    const rows = bodyRows(BOX, options);
+
+    // Assert: 本体は 40 / 1.56 = 25.6px、y = 7.2 〜 32.8
+    expect(rows.start).toBeCloseTo(7.18, 1);
+    expect(rows.end).toBeCloseTo(32.82, 1);
+    // ROI を 8 分割した 1 本目 (y=5) と 7 本目 (y=35) は本体の外にある
+    expect(rows.start).toBeGreaterThan(5);
+    expect(rows.end).toBeLessThan(35);
+  });
+
+  it('傾いていても ROI 座標では同じ範囲になる（水平化済みだから）', () => {
+    // Arrange
+    const options = { padding: 0.28, targetHeight: 40 };
+
+    // Act
+    const upright = bodyRows(BOX, options);
+    const tilted = bodyRows(TILTED, options);
+
+    // Assert
+    expect(tilted.start).toBeCloseTo(upright.start, 6);
+    expect(tilted.end).toBeCloseTo(upright.end, 6);
+  });
+
+  it('余白を広げても ROI の外には出ない', () => {
+    // Arrange / Act
+    const rows = bodyRows(BOX, { padding: 0.05 }, 0.5);
+    const geometry = roiGeometry(BOX, { padding: 0.05 });
+
+    // Assert
+    expect(rows.start).toBe(0);
+    expect(rows.end).toBe(geometry.height);
   });
 });
 

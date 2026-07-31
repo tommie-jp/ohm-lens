@@ -7,7 +7,7 @@ import { refineBoxExtent } from '../../src/core/refine.js';
 import { rectify } from '../../src/core/rectify.js';
 import { bodyColumns } from '../../src/core/roiMapping.js';
 import { bandRuns } from '../../src/core/bands/segment.js';
-import { recoverFromPair, recoverToleranceRun } from '../../src/core/bands/recover.js';
+import { recoverRuns } from '../../src/core/bands/recover.js';
 import { alignRunsToBands } from '../../src/core/bands/align.js';
 import {
   addObservations,
@@ -20,7 +20,14 @@ import { adaptToAnchor } from '../../src/core/color/whiteBalance.js';
 import { labToRgb } from '../../src/core/color/colorSpace.js';
 import { BAND_REFERENCE_COLORS } from '../../src/core/color/colors.js';
 import type { BandColor, LabColor, ProfileSample } from '../../src/types.js';
-import { hasSamples, loadImage, loadManifest, loadPalette, type SampleEntry } from './loadSample.js';
+import {
+  hasSamples,
+  isTrainable,
+  loadImage,
+  loadManifest,
+  loadPalette,
+  type SampleEntry,
+} from './loadSample.js';
 
 /**
  * 基準色テーブルの較正（Step 0-7）。
@@ -64,7 +71,6 @@ const CLUSTER_DELTA_E = 18;
 const MIN_RUN_LENGTH = 3;
 /** この件数に満たない色は学習結果として採用しない（既定値のまま残す）。 */
 const MIN_SAMPLES_PER_COLOR = 3;
-
 const DIGITS: BandColor[] = [
   'black', 'brown', 'red', 'orange', 'yellow', 'green', 'blue', 'violet', 'grey', 'white',
 ];
@@ -91,9 +97,10 @@ interface Run {
 /**
  * 本体ランを除いた「バンド候補」のランを取り出す。
  *
- * 解析側（`core/pipeline.ts`）と**同じ順序で同じ関数を通す**ので、較正と本番で
- * 条件がずれない。`bandRuns` だけを呼んでいた時期があり、本番に拾い直しが
- * 入ったあともコメントだけが「ずれない」と主張していた。
+ * 合成は `recoverRuns` に一本化してあるので、較正と本番で条件がずれない。
+ * かつては両者が手で合成しており、`bandRuns` だけを呼んでいた時期も、
+ * 中間挿入（`recoverFromGap`）が本番にだけ入った時期もあって、そのたびに
+ * コメントだけが「ずれない」と主張していた。**主張ではなく構造で担保する。**
  *
  * 拾い直しが較正で効くのは 39 枚中 1 枚（`38-10Mohm` がラン 2 → 3 本）だけで、
  * 学習されるパレットも成績も変わらない。**それでも揃えておく**のは、
@@ -101,13 +108,17 @@ interface Run {
  * ときの切り分けができなくなるため（`docs/07` の較正と読み取りの非対称性）。
  */
 function extractRuns(profile: readonly ProfileSample[]): Run[] {
-  return recoverFromPair(profile, recoverToleranceRun(profile, bandRuns(profile, {
+  // 拾い直しのしきい値は本番（RECOVER_DELTA_E = 3）に合わせず既定の 9 のまま。
+  // ΔE3 で拾える弱いランは金属容疑で、学習対象にならない（`core/learning.ts`）。
+  // 較正は確信の持てるランだけから学びたいので、緩める理由が無い。
+  const runs = bandRuns(profile, {
     edgeDeltaE: EDGE_DELTA_E,
     minBandWidth: MIN_RUN_LENGTH,
     clusterDeltaE: CLUSTER_DELTA_E,
     bodyLightnessWeight: BODY_LIGHTNESS_WEIGHT,
     keepEdgeRuns: true,
-  }))).map((run) => ({ lab: run.lab, length: run.end - run.start }));
+  });
+  return recoverRuns(profile, runs).map((run) => ({ lab: run.lab, length: run.end - run.start }));
 }
 
 function medianLab(samples: readonly LabColor[]): LabColor {
@@ -120,7 +131,9 @@ function medianLab(samples: readonly LabColor[]): LabColor {
 
 describe.skipIf(!hasSamples())('基準色の較正', () => {
   it('実写真からバンド色の Lab を集計する', { timeout: 600_000 }, async () => {
-    const entries = loadManifest();
+    // 未検証の検体は外す。人手ラベルも bands も無いと期待値から逆算するので、
+    // 誤った対応付けがそのまま基準色に混ざる
+    const entries = loadManifest().filter(isTrainable);
     const labels = loadLabels();
     // 前回の学習結果があれば、それを使って対応付ける（反復するほど精度が上がる）
     const palette = loadPalette();
@@ -182,7 +195,11 @@ describe.skipIf(!hasSamples())('基準色の較正', () => {
       }
     }
 
-    const table: string[] = ['', `並びが一致した画像: ${matched}/${entries.length}`, ''];
+    const table: string[] = [
+      '',
+      `並びが一致した画像: ${matched}/${entries.length}`,
+      '',
+    ];
     table.push('色       件数  現在の Lab               実写の Lab               sRGB 換算');
     for (const color of [...DIGITS, 'gold', 'silver'] as BandColor[]) {
       const samples = observed.get(color) ?? [];
@@ -208,6 +225,7 @@ describe.skipIf(!hasSamples())('基準色の較正', () => {
     for (const [color, samples] of observed) {
       observations = addObservations(observations, samples.map((lab) => ({ color, lab })));
     }
+    // 学習しない色（金属色）の規則は paletteOverrides が持つ（GUI と共有）
     const learned = paletteOverrides(observations, MIN_SAMPLES_PER_COLOR);
     writeFileSync(
       PALETTE_PATH,

@@ -45,8 +45,61 @@ const PAIR_STEPS = [1, 2] as const;
 /** 予測位置のまわりを探す窓の半幅（刻みに対する割合）。 */
 const PAIR_WINDOW = 0.5;
 
+/**
+ * 中間への挿入を試すランの本数の下限。
+ *
+ * 「他より広い」を言うには比べる相手が要る。ラン 3 本では間隔が 2 つしかなく、
+ * 中央値が最大値と一致してしまって比較にならない。4 本＝間隔 3 つが下限。
+ */
+const GAP_MIN_RUNS = 4;
+
+/**
+ * 中間への挿入を試すランの本数の上限。
+ *
+ * 軸形抵抗器のバンドは最大 6 本。すでに 6 本以上出ているなら、症状は
+ * 「不足」ではなく「過分割」で、足すのは筋が違う（実測 `07-10Ω` は
+ * カーペットの模様を拾って 8 本に割れており、挿入は雑音を増やすだけだった）。
+ */
+const GAP_MAX_RUNS = 5;
+
+/** 最大の間隔が他の間隔の中央値のこの倍率を超えたら「異常に広い」とみなす。 */
+const GAP_RATIO = 1.8;
+
+/**
+ * 挿入するランの幅の上限（既存のランの幅の中央値に対する倍率）。
+ *
+ * バンドは隣のバンドと同じくらいの太さで印刷される。それより極端に太い区間は
+ * 本体の陰か肩の照り返しで、バンドではない。実測でも本物の挿入は中央値の
+ * 0.33〜0.50 倍だったのに対し、誤った挿入（`09-82Ω`）は 3.00 倍だった。
+ */
+const GAP_WIDTH_RATIO = 1.5;
+
+/**
+ * 間隔の内側を探す割合。
+ *
+ * 両隣のバンドの縁は必ずぼけていて、本体色から大きく外れる。端まで探すと
+ * その縁を拾ってしまうので、間隔の中央だけを見る。
+ */
+const GAP_WINDOW = 0.6;
+
+/**
+ * 間隔の中で本体色から離れているとみなす差（CIE76）。
+ *
+ * 平坦な本体の上を探す他の 2 つ（`core/settings.ts` が実効値 **3** を渡す）
+ * より**高く**する。バンドに挟まれた間隔はぼけの傾斜が残っていて、低い
+ * しきい値では傾斜そのものが連続区間として出てしまい、幅が本物のバンドより
+ * 広くなる。しきい値の性質が違うので `RecoverOptions.deltaE` とは分ける。
+ */
+const GAP_DELTA_E = 9;
+
 export interface RecoverOptions {
-  /** 本体色との差のしきい値（CIE76）。 */
+  /**
+   * 本体色との差のしきい値（CIE76）。
+   *
+   * 効くのは平坦な本体の上を探す {@link recoverToleranceRun} と
+   * {@link recoverFromPair} だけで、{@link recoverFromGap} は
+   * {@link GAP_DELTA_E} を使う（探す場所の性質が違うため）。
+   */
   readonly deltaE?: number;
 }
 
@@ -97,12 +150,8 @@ export function recoverToleranceRun(
   const from = centerOf(third) + pitch * SEARCH_FROM;
   const to = centerOf(third) + pitch * SEARCH_TO;
 
-  // 本体色は「どのランにも属さない列」の中央値
-  const covered = new Set<number>();
-  for (const run of runs) for (let x = run.start; x < run.end; x += 1) covered.add(x);
-  const bodySamples = profile.filter((sample) => !covered.has(sample.x));
-  if (bodySamples.length === 0) return runs;
-  const body = medianLab(bodySamples);
+  const body = bodyColorOutside(profile, runs);
+  if (body === null) return runs;
 
   const found = scanForRun(profile, body, from, to, options.deltaE ?? RECOVER_DELTA_E);
   if (found === null) return runs;
@@ -209,4 +258,97 @@ export function recoverFromPair(
   }
 
   return added.length === 0 ? runs : [...runs, ...added];
+}
+
+/**
+ * 隣接する間隔が 1 つだけ異常に広いとき、そこに見落としたバンドがあるとみて
+ * 拾い直す。
+ *
+ * `recoverToleranceRun` は末尾にしか足さないので値が変わらないが、こちらは
+ * **数字・倍率の位置に挿入する**ので値が直接変わる。位置からの推測を格子に
+ * 一般化して内挿する案は正解 27 → 25 に落ちた（`docs/11` §3.5.1）。同じ刃を
+ * 持つ施策なので、次の 2 段で縛る。
+ *
+ * 1. **発火を絞る** — 他の間隔の中央値の {@link GAP_RATIO} 倍を超える間隔が
+ *    1 つだけあり、かつその中央に本体色から離れた区間が実在するときだけ
+ * 2. **数字に化けさせない** — 挿入したランに `metallicOnly` の印をつける。
+ *    デコーダはこれを金・銀に限り、タダで捨てられる扱いにする
+ *    （`value/jointDecode.ts`）。本体ランに飲み込まれるほど本体に近かった
+ *    以上、金・銀か肩の照り返し以外ではありえない
+ *
+ * 実測の対象は `01-1ohm`（5 本帯の倍率の銀が本体に溶けて 4 本になり、
+ * 間隔が 23.5 / 12 / 11.5 と最初だけ 2 倍開いていた）。
+ *
+ * しきい値は外から差せない。`RecoverOptions.deltaE` は平坦な本体の上を探す
+ * 前提で決めた値で、ぼけの傾斜が残る間隔の内側にはそのまま使えないため。
+ *
+ * @param profile 解析範囲の 1D プロファイル（色順応補正済み）
+ * @param runs バンド候補のラン（位置順）
+ */
+export function recoverFromGap(
+  profile: readonly ProfileSample[],
+  runs: readonly ColorRun[],
+): readonly ColorRun[] {
+  if (runs.length < GAP_MIN_RUNS || runs.length > GAP_MAX_RUNS || profile.length === 0) {
+    return runs;
+  }
+
+  const centers = runs.map(centerOf);
+  const gaps = centers.slice(1).map((center, index) => center - (centers[index] as number));
+  const widest = gaps.indexOf(Math.max(...gaps));
+
+  // 最大を除いた間隔の中央値と比べる。最大自身を含めると比が鈍る
+  const others = gaps.filter((_, index) => index !== widest);
+  const median = medianInPlace(Float64Array.from(others));
+  if (median <= 0) return runs;
+  if ((gaps[widest] as number) / median < GAP_RATIO) return runs;
+
+  const before = runs[widest] as ColorRun;
+  const after = runs[widest + 1] as ColorRun;
+  const inner = after.start - before.end;
+  if (inner <= 0) return runs;
+
+  const body = bodyColorOutside(profile, runs);
+  if (body === null) return runs;
+
+  const middle = (before.end + after.start) / 2;
+  const half = (inner * GAP_WINDOW) / 2;
+  const found = scanForRun(profile, body, middle - half, middle + half, GAP_DELTA_E);
+  if (found === null) return runs;
+
+  // バンドは隣のバンドと同じくらいの太さ。極端に太ければ本体か肩の照り返し
+  const widthMedian = medianInPlace(Float64Array.from(runs, (run) => run.end - run.start));
+  if (found.end - found.start > widthMedian * GAP_WIDTH_RATIO) return runs;
+
+  return [
+    ...runs.slice(0, widest + 1),
+    { ...found, metallicOnly: true },
+    ...runs.slice(widest + 1),
+  ];
+}
+
+/**
+ * 3 つの拾い直しを本番の順序で通す。
+ *
+ * **合成をここに置くのは、経路が分かれるのを構造で防ぐため。** 解析
+ * （`core/pipeline.ts`）と較正（`tests/fixtures/calibrate.test.ts`）が
+ * それぞれ手で合成していた時期があり、片方に関数が足されたときにもう片方が
+ * 取り残された。順序と組み合わせは 1 か所にしか書かない。
+ *
+ * 中間への挿入（{@link recoverFromGap}）を**先頭に置く**のが要点。後ろに
+ * 回すと、末尾に足した許容差バンドの広い間隔を「異常」と読んで、推測の上に
+ * 推測を積む。3 者は本数の条件（4〜5 / 3 / 2）で互いに排他なので、順に
+ * 通せばどれか 1 つだけが働く。
+ *
+ * @param profile 解析範囲の 1D プロファイル（色順応補正済み）
+ * @param runs バンド候補のラン（位置順）
+ */
+export function recoverRuns(
+  profile: readonly ProfileSample[],
+  runs: readonly ColorRun[],
+  options: RecoverOptions = {},
+): readonly ColorRun[] {
+  const withGap = recoverFromGap(profile, runs);
+  const withTolerance = recoverToleranceRun(profile, withGap, options);
+  return recoverFromPair(profile, withTolerance, options);
 }

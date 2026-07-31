@@ -32,7 +32,7 @@ describe('usedRuns — 役割の割り当て', () => {
     expect(roleSummary(reading!)).toEqual([
       'yellow:4',
       'violet:7',
-      'red:×100',
+      'red:×10²',
       'gold:±5%',
     ]);
     expect(reading!.usedRuns.map((used) => used.role)).toEqual([
@@ -54,7 +54,7 @@ describe('usedRuns — 役割の割り当て', () => {
       'brown:1',
       'black:0',
       'black:0',
-      'silver:×0.01',
+      'silver:×10⁻²',
       'brown:±1%',
     ]);
   });

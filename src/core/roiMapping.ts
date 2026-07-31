@@ -1,3 +1,4 @@
+import type { RowRange } from './bands/profile.js';
 import type { OrientedBox } from './locate.js';
 import type { RectifyOptions } from './rectify.js';
 
@@ -133,6 +134,27 @@ export function bodyColumns(
   return {
     start: Math.max(0, center - half),
     end: Math.min(geometry.width, center + half),
+  };
+}
+
+/**
+ * 検出した本体が ROI のどの行を占めるかを返す（{@link bodyColumns} の短軸版）。
+ *
+ * 走査線を多重化するとき、ROI 全体を等分すると**両端の走査線が本体の外に
+ * 落ちる**。パディングは短軸にも掛かるので、padding 0.28 では本体は ROI 高さの
+ * 中央 64% しか占めない。分割対象はこの範囲にする。
+ *
+ * @param margin 本体の太さに対する外側への余白
+ */
+export function bodyRows(box: OrientedBox, options: RectifyOptions, margin = 0): RowRange {
+  const geometry = roiGeometry(box, options);
+  const bodyHeight = box.thickness * geometry.scale;
+  const center = geometry.height / 2;
+  const half = bodyHeight * (0.5 + margin);
+
+  return {
+    start: Math.max(0, center - half),
+    end: Math.min(geometry.height, center + half),
   };
 }
 

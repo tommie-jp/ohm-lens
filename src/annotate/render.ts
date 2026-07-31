@@ -3,10 +3,26 @@ import type { OrientedBox } from '../core/locate.js';
 import type { RectifyOptions } from '../core/rectify.js';
 import { bandCorners, labelAnchor, labelSide } from '../core/roiMapping.js';
 import { BAND_COLOR_ABBR, BAND_COLOR_JA, bandColorCss } from '../core/color/colors.js';
-import type { UsedRun } from '../core/value/jointDecode.js';
+import { decodedOhmsFor, roleTextsFor, type UsedRun } from '../core/value/jointDecode.js';
+import { formatOhms } from '../core/format.js';
 import type { LabColor } from '../types.js';
 import type { Palette } from '../core/color/palette.js';
+import type { BandInterval } from '../core/bands/boundaries.js';
 import { buildColorSpaceSvg, colorSpacePanelSize } from './colorSpace.js';
+import {
+  CHART,
+  SERIES_COLOR,
+  absoluteSum,
+  buildChartSvg,
+  buildRoiStripSvg,
+  chartBlockHeight,
+  differentiate,
+  LABEL_COLOR,
+  sectionTitleSvg,
+  stripBlockHeight,
+  type StripData,
+  type ChartSeries,
+} from './profileChart.js';
 
 /**
  * 検出結果を SVG として組み立てる（Node 側の焼き込み用）。
@@ -23,7 +39,90 @@ const BOX_COLOR = '#ff3b30';
 /** 採用されなかったランの色。捨てた事実が見えるようにする。 */
 const DROPPED_COLOR = '#8e8e93';
 
-const CAPTION_HEIGHT = 26;
+/**
+ * キャプション帯の 1 行の高さ [px]。
+ *
+ * 以前は写真の上に半透明の黒で重ねていたが、上端に写った抵抗器やバンドが
+ * 隠れた。写真の外に帯を作り、独立した文字列として出す。
+ * 写真は帯の高さだけ下にずらして描く。
+ */
+export const CAPTION_LINE_HEIGHT = 26;
+
+const CAPTION_FONT_PX = 14;
+
+/** 帯の左右の余白 [px]。 */
+const CAPTION_PADDING = 6;
+
+/**
+ * 等幅フォントでの文字幅 [px]。全角は 2 文字ぶんとして数える。
+ * キャプションには「期待 82kΩ」のような日本語が混ざる。
+ */
+function textUnits(text: string): number {
+  let units = 0;
+  for (const ch of text) units += ch.charCodeAt(0) > 0x2000 ? 2 : 1;
+  return units;
+}
+
+/**
+ * キャプションを帯の幅に合わせて折り返す。
+ *
+ * 切り詰めると期待値や確信度が読めなくなるので、行を足して全文を見せる。
+ * 単語の途中で折れないよう空白で分け、1 語が長すぎるときだけ強制的に折る。
+ */
+export function captionLines(caption: string, width: number): string[] {
+  const perLine = Math.max(8, Math.floor((width - CAPTION_PADDING * 2) / (CAPTION_FONT_PX * 0.62)));
+  const lines: string[] = [];
+  let current = '';
+
+  const flush = (): void => {
+    if (current.length > 0) lines.push(current);
+    current = '';
+  };
+
+  for (const word of caption.split(' ')) {
+    let piece = word;
+    // 1 語で 1 行に収まらないときは、収まる長さで切って次の行へ送る
+    while (textUnits(piece) > perLine) {
+      flush();
+      let head = '';
+      for (const ch of piece) {
+        if (textUnits(head + ch) > perLine) break;
+        head += ch;
+      }
+      lines.push(head);
+      piece = piece.slice(head.length);
+    }
+    if (piece.length === 0) continue;
+    const candidate = current.length === 0 ? piece : `${current} ${piece}`;
+    if (textUnits(candidate) > perLine) {
+      flush();
+      current = piece;
+    } else {
+      current = candidate;
+    }
+  }
+  flush();
+
+  return lines.length === 0 ? [''] : lines;
+}
+
+/** キャプション帯の高さ [px]。折り返した行数ぶん高くなる。 */
+export function captionHeightFor(caption: string, width: number): number {
+  return captionLines(caption, width).length * CAPTION_LINE_HEIGHT;
+}
+
+/** 段の見出しの文言（日本語フォントが無い環境では英字にする）。 */
+const SECTION_TITLES = {
+  table: { ja: 'カラーコード読み取り値', en: 'Color code reading' },
+  expected: { ja: 'カラーコード期待値', en: 'Color code expected' },
+  strip: { ja: '水平化・色補正 ROI', en: 'Rectified ROI' },
+  lab: { ja: 'Labグラフ', en: 'Lab chart' },
+  abs: { ja: 'absグラフ', en: 'abs chart' },
+  derivative: { ja: 'Lab微分グラフ２', en: 'Lab derivative 2' },
+} as const;
+
+/** abs の定義。グラフの見出しの脇に出して、何を描いているかを明示する。 */
+const ABS_FORMULA = 'abs = |dL*/dx| + |da*/dx| + |db*/dx|';
 
 /** 注釈の文字の大きさ。太さに比例させる。 */
 function labelFontPx(box: OrientedBox): number {
@@ -57,37 +156,24 @@ const TABLE = {
 /** 表の行数（番号・色名・色玉・意味）。 */
 const TABLE_ROWS = 4;
 
+/** 期待値の表の行数（番号・色名・色玉・区間）。 */
+const EXPECTED_ROWS = 4;
+
 /**
- * 中心線プロファイルのグラフの寸法。
+ * 期待値の表の高さ [px]（見出しを含む）。正解データが無ければ 0。
  *
- * ラン分割が実際に食べている値（色順応補正後の L*a*b*）をそのまま描く。
- * 「なぜこの本数になったか」を目で追うためのもの。
+ * 人手で確定した境界（`boundaries.json` の `verified: true`）だけを出す。
+ * 種（推定値）を並べても検出そのものを写しているだけで、見比べる意味がない。
  */
-const CHART = {
-  height: 150,
-  /** 目盛りラベルのぶん左右に空ける（左が L*、右が a* と b*） */
-  axisWidth: 34,
-  padding: 10,
-  fontPx: 11,
-  /**
-   * 値域をプロット高のどこに収めるか。
-   * 最大値を高さの 90%、最小値を 10% の位置に置き、上下に余白を残す。
-   */
-  topFraction: 0.1,
-  bottomFraction: 0.9,
-} as const;
+export function expectedTableHeightFor(labels: readonly BandInterval[] | undefined): number {
+  if (labels === undefined || labels.length === 0) return 0;
+  return CHART.titleHeight + TABLE.rowHeight * EXPECTED_ROWS + TABLE.padding * 2;
+}
 
-/** L* / a* / b* の線の色。a* は赤緑軸、b* は青黄軸なのでそれに寄せる。 */
-const CHART_SERIES = [
-  { key: 'l' as const, label: 'L*', color: '#444444' },
-  { key: 'a' as const, label: 'a*', color: '#d0021b' },
-  { key: 'b' as const, label: 'b*', color: '#1f6fb2' },
-];
-
-/** バンド一覧表の高さ [px]。バンドが無ければ 0。 */
+/** バンド一覧表の高さ [px]（見出しを含む）。バンドが無ければ 0。 */
 export function tableHeightFor(bandCount: number): number {
   if (bandCount === 0) return 0;
-  return TABLE.rowHeight * TABLE_ROWS + TABLE.padding * 2;
+  return CHART.titleHeight + TABLE.rowHeight * TABLE_ROWS + TABLE.padding * 2;
 }
 
 /** バンド一覧表の幅 [px]。 */
@@ -96,13 +182,22 @@ function tableWidthFor(bandCount: number): number {
 }
 
 /**
- * 表とグラフを並べた帯の高さ [px]。
- * グラフは表の右に置くので、高い方に合わせる。
+ * 表とグラフの帯の高さ [px]。
+ *
+ * グラフは表の右ではなく下に、幅いっぱいの段として積む。表の右に置くと
+ * 写真が細いときにグラフまで細くなり、ラン境界が潰れて読めなかった。
+ *
+ * 段は 表 → ROI ストリップ → Lab グラフ → abs グラフ → Lab 微分グラフ２ の順。
+ * ROI ストリップを Lab グラフの真上に置くのは、**X 軸を共有させる**ため
+ * （`plotGeometry`）。グラフの 0% / 100% の破線が画像上の本体の端に重なる。
  */
-export function blockHeightFor(input: Pick<AnnotateInput, 'bands' | 'profile'>): number {
-  const table = tableHeightFor(input.bands.length);
-  const chart = input.profile === undefined || input.profile.samples.length === 0 ? 0 : CHART.height;
-  return Math.max(table, chart);
+export function blockHeightFor(
+  input: Pick<AnnotateInput, 'bands' | 'profile' | 'strip' | 'labels'>,
+): number {
+  const table = tableHeightFor(input.bands.length) + expectedTableHeightFor(input.labels);
+  const hasProfile = input.profile !== undefined && input.profile.samples.length > 0;
+  if (!hasProfile) return table;
+  return table + (input.strip === undefined ? 0 : stripBlockHeight()) + chartBlockHeight() * 3;
 }
 
 export interface AnnotateInput {
@@ -113,6 +208,13 @@ export interface AnnotateInput {
   readonly rectify: RectifyOptions;
   /** デコーダが採用したラン（無ければ色名のみ表示） */
   readonly usedRuns?: readonly UsedRun[];
+  /**
+   * 読み取った抵抗値 [Ω]。読み取り値の表の見出しに添える。
+   * `null` は「読取不可」、省略すると見出しに何も添えない。
+   */
+  readonly readingOhms?: number | null;
+  /** 読み取り値を値として出してよいか。false なら見出しに「(保留)」を付ける */
+  readonly readingConfident?: boolean;
   /** 捨てられたランの添字 */
   readonly droppedRuns?: readonly number[];
   readonly caption: string;
@@ -138,6 +240,16 @@ export interface AnnotateInput {
     /** バンド候補のランの境界（縦線で重ねる） */
     readonly runs: readonly { readonly start: number; readonly end: number }[];
   };
+  /**
+   * 水平化・色補正した ROI。Lab グラフの真上に、X 軸を揃えて描く。
+   * 省略すると描かない（帯も足さない）。
+   */
+  readonly strip?: StripData;
+  /**
+   * 人手で確定した境界の区間 [%]。あれば Lab グラフに重ねる。
+   * 検出のラン境界と並べて見るためのもので、解析には使わない。
+   */
+  readonly labels?: readonly BandInterval[];
   /** 注釈のために写真の外へ広げた量（{@link labelOverflow} の結果） */
   readonly labelOverflow?: LabelOverflow;
 }
@@ -235,6 +347,21 @@ function textElement(
 }
 
 /**
+ * 読み取り値の表の見出しに添える抵抗値。
+ *
+ * 色名と意味の並びだけでは「結局いくつなのか」がすぐに読めない。
+ * 確信度が足りないものは実機では出ない値なので「(保留)」と断る。
+ * 値を渡されていなければ何も添えない（`undefined`）。
+ */
+function readingNote(
+  input: Pick<AnnotateInput, 'readingOhms' | 'readingConfident'>,
+): string | undefined {
+  if (input.readingOhms === undefined) return undefined;
+  if (input.readingOhms === null) return '読取不可';
+  return `${formatOhms(input.readingOhms)}${input.readingConfident === false ? '(保留)' : ''}`;
+}
+
+/**
  * バンドの一覧表を描く。番号・色名・色玉・意味の 4 行。
  *
  * 番号は写真に焼いた番号と対応する。色玉を挟むのは、金/黄・灰/銀のような
@@ -244,23 +371,25 @@ function textElement(
 function buildBandTableSvg(
   input: AnnotateInput,
   nameOf: (color: Band['color']) => string,
+  title: string,
   top: number,
 ): string {
   if (input.bands.length === 0) return '';
 
   const usedByIndex = new Map((input.usedRuns ?? []).map((used) => [used.runIndex, used]));
   const dropped = new Set(input.droppedRuns ?? []);
-  const parts: string[] = [];
+  const parts: string[] = [sectionTitleSvg(0, top, title, readingNote(input))];
 
+  const frameTop = top + CHART.titleHeight;
   const width = tableWidthFor(input.bands.length);
-  const height = tableHeightFor(input.bands.length);
+  const height = tableHeightFor(input.bands.length) - CHART.titleHeight;
   parts.push(
-    `<rect x="0.5" y="${(top + 0.5).toFixed(1)}" width="${width}" height="${height - 1}" ` +
+    `<rect x="0.5" y="${(frameTop + 0.5).toFixed(1)}" width="${width}" height="${height - 1}" ` +
       `fill="#ffffff" stroke="rgba(0,0,0,0.25)" stroke-width="1" />`,
   );
 
   const rowY = (row: number): number =>
-    top + TABLE.padding + TABLE.rowHeight * row + TABLE.rowHeight * 0.72;
+    frameTop + TABLE.padding + TABLE.rowHeight * row + TABLE.rowHeight * 0.72;
 
   input.bands.forEach((band, index) => {
     const used = usedByIndex.get(index);
@@ -297,160 +426,75 @@ function buildBandTableSvg(
 }
 
 /**
- * 中心線プロファイルのグラフを描く。L* / a* / b* を 1 枚に重ねる。
+ * カラーコードの**期待値**の表。読み取り値の表と同じ体裁で真下に置く。
  *
- * X 軸は抵抗器の長さ方向（ROI の列）。Y 軸は 3 系列の値域をまとめて取る。
- * ラン境界を縦線で、本体範囲の外を灰色で塗るので、**なぜこの本数になったか**
- * を目で追える。値は色順応補正の後なので、L* が 100 を超えることがある。
+ * 出すのは人手で確定した境界（`boundaries.json` の `verified: true`）だけ。
+ * 番号は読み取り値の表とは独立で、**期待値の並び順**（左から右）。
+ *
+ * 4 行目は読み取り値の表と同じ**カラーコード上の意味**。色列は画像上の並びで
+ * 読み取り方向を持たないので、`roleTextsFor` がデコードの成否で向きを決める。
+ *
+ * 見出しには**その色列が表す抵抗値**を添える（`decodedOhmsFor`）。MANIFEST の
+ * 期待値ではなく色列から復号した値なので、食い違えばラベル自体の誤りが分かる。
  */
-function buildProfileChartSvg(input: AnnotateInput, left: number, top: number): string {
-  const chart = input.profile;
-  if (chart === undefined || chart.samples.length === 0) return '';
+function buildExpectedTableSvg(
+  labels: readonly BandInterval[],
+  nameOf: (color: Band['color']) => string,
+  title: string,
+  top: number,
+): string {
+  if (labels.length === 0) return '';
 
-  const width = Math.max(0, input.width - left - CHART.padding);
-  if (width < 80) return '';
-
-  const plotLeft = left + CHART.axisWidth;
-  const plotWidth = width - CHART.axisWidth * 2;
-  const plotTop = top + CHART.padding;
-  const plotHeight = CHART.height - CHART.padding * 2 - CHART.fontPx;
-
-  // L* と a*/b* は値域が違う（L* は 0〜100 超、a*/b* は概ね -60〜80）。
-  // 同じ軸に乗せると L* の変化ばかりが目立つので、系列ごとにスケールを分ける。
-  const lightness = chart.samples.map((sample) => sample.lab.l);
-  const chroma = chart.samples.flatMap((sample) => [sample.lab.a, sample.lab.b]);
-
-  /** 最大値をプロット高の 90%、最小値を 10% の位置に写す。 */
-  const scaleOf = (values: readonly number[]): ((value: number) => number) => {
-    const min = Math.min(...values);
-    const max = Math.max(...values);
-    const span = Math.max(1e-6, max - min);
-    return (value: number): number =>
-      plotTop +
-      (CHART.topFraction +
-        (CHART.bottomFraction - CHART.topFraction) * ((max - value) / span)) *
-        plotHeight;
-  };
-  const toLy = scaleOf(lightness);
-  const toCy = scaleOf(chroma);
-  const yOf = (key: 'l' | 'a' | 'b', value: number): number =>
-    key === 'l' ? toLy(value) : toCy(value);
-
-  const count = chart.samples.length;
-  const toX = (index: number): number =>
-    plotLeft + (count <= 1 ? 0 : (index / (count - 1)) * plotWidth);
-
+  const ohms = decodedOhmsFor(labels.map((label) => label.color));
   const parts: string[] = [
-    `<rect x="${left.toFixed(1)}" y="${top.toFixed(1)}" width="${width.toFixed(1)}" ` +
-      `height="${CHART.height}" fill="#ffffff" stroke="rgba(0,0,0,0.25)" stroke-width="1" />`,
+    sectionTitleSvg(0, top, title, ohms === null ? '?' : formatOhms(ohms)),
   ];
+  const frameTop = top + CHART.titleHeight;
+  const width = tableWidthFor(labels.length);
+  const height = expectedTableHeightFor(labels) - CHART.titleHeight;
+  parts.push(
+    `<rect x="0.5" y="${(frameTop + 0.5).toFixed(1)}" width="${width}" height="${height - 1}" ` +
+      `fill="#ffffff" stroke="rgba(0,0,0,0.25)" stroke-width="1" />`,
+  );
 
-  // 本体範囲の外は薄く塗る（ここのランはバンドにしない）
-  if (chart.extent !== null) {
-    const shade = (from: number, to: number): void => {
-      if (to <= from) return;
-      parts.push(
-        `<rect x="${toX(from).toFixed(1)}" y="${plotTop.toFixed(1)}" ` +
-          `width="${(toX(to) - toX(from)).toFixed(1)}" height="${plotHeight.toFixed(1)}" ` +
-          `fill="rgba(0,0,0,0.06)" />`,
-      );
-    };
-    shade(0, chart.extent.start);
-    shade(chart.extent.end, count - 1);
-  }
+  const rowY = (row: number): number =>
+    frameTop + TABLE.padding + TABLE.rowHeight * row + TABLE.rowHeight * 0.72;
+  const roleTexts = roleTextsFor(labels.map((label) => label.color));
 
-  // 0 の水平線（a*/b* の符号が読めるように。L* ではなく彩度側のスケール）
-  const chromaMin = Math.min(...chroma);
-  const chromaMax = Math.max(...chroma);
-  if (chromaMin < 0 && chromaMax > 0) {
-    parts.push(
-      `<line x1="${plotLeft.toFixed(1)}" y1="${toCy(0).toFixed(1)}" ` +
-        `x2="${(plotLeft + plotWidth).toFixed(1)}" y2="${toCy(0).toFixed(1)}" ` +
-        `stroke="rgba(0,0,0,0.25)" stroke-width="1" stroke-dasharray="3 3" />`,
-    );
-  }
+  labels.forEach((label, index) => {
+    const cx = TABLE.padding + TABLE.columnWidth * index + TABLE.columnWidth / 2;
 
-  // ラン境界（本数判定の理由が見えるように）
-  const dropped = new Set(input.droppedRuns ?? []);
-  chart.runs.forEach((run, index) => {
-    const isDropped = dropped.has(index);
-    for (const edge of [run.start, run.end]) {
-      parts.push(
-        `<line x1="${toX(edge).toFixed(1)}" y1="${plotTop.toFixed(1)}" ` +
-          `x2="${toX(edge).toFixed(1)}" y2="${(plotTop + plotHeight).toFixed(1)}" ` +
-          `stroke="rgba(255,59,48,${isDropped ? 0.28 : 0.55})" stroke-width="1" />`,
-      );
-    }
-  });
-
-  // 3 系列
-  for (const series of CHART_SERIES) {
-    const points = chart.samples
-      .map(
-        (sample, index) =>
-          `${toX(index).toFixed(1)},${yOf(series.key, sample.lab[series.key]).toFixed(1)}`,
-      )
-      .join(' ');
-    parts.push(
-      `<polyline points="${points}" fill="none" stroke="${series.color}" ` +
-        `stroke-width="1.5" stroke-linejoin="round" />`,
-    );
-  }
-
-  // ランの通し番号。写真に焼いた番号・一覧表の番号と対応する。
-  // 折れ線より後に描いて線に隠れないようにする
-  chart.runs.forEach((run, index) => {
-    const center = toX((run.start + run.end) / 2);
+    // 1 行目: 番号（期待値の並び順）
+    parts.push(textElement(cx, rowY(0), String(index + 1), TABLE.fontPx, LABEL_COLOR, 1));
+    // 2 行目: 色名。色が分かっていないものは「?」
     parts.push(
       textElement(
-        center,
-        plotTop + CHART.fontPx,
-        String(index + 1),
-        CHART.fontPx + 1,
-        BOX_COLOR,
-        dropped.has(index) ? 0.45 : 1,
+        cx,
+        rowY(1),
+        label.color === null ? '?' : nameOf(label.color),
+        TABLE.fontPx,
+        '#111',
+        1,
       ),
     );
-  });
-
-  // 目盛り: 左が L*、右が a*/b*。線の色に合わせて対応が分かるようにする
-  const tick = (
-    value: number,
-    y: number,
-    x: number,
-    anchor: 'start' | 'end',
-    fill: string,
-  ): string =>
-    `<text x="${x.toFixed(1)}" y="${y.toFixed(1)}" font-family="sans-serif" ` +
-    `font-size="${CHART.fontPx}" fill="${fill}" text-anchor="${anchor}" ` +
-    `dominant-baseline="central">${Math.round(value)}</text>`;
-
-  const leftX = plotLeft - 4;
-  const rightX = plotLeft + plotWidth + 4;
-  const lMin = Math.min(...lightness);
-  const lMax = Math.max(...lightness);
-  const lColor = (CHART_SERIES[0] as (typeof CHART_SERIES)[number]).color;
-  parts.push(
-    tick(lMax, toLy(lMax), leftX, 'end', lColor),
-    tick(lMin, toLy(lMin), leftX, 'end', lColor),
-    tick(chromaMax, toCy(chromaMax), rightX, 'start', '#666'),
-    tick(chromaMin, toCy(chromaMin), rightX, 'start', '#666'),
-  );
-  if (chromaMin < 0 && chromaMax > 0) parts.push(tick(0, toCy(0), rightX, 'start', '#666'));
-
-
-  const legendY = plotTop + plotHeight + CHART.fontPx + 2;
-  const legendStep = Math.min(72, Math.max(52, plotWidth / CHART_SERIES.length));
-  CHART_SERIES.forEach((series, index) => {
-    const x = plotLeft + index * legendStep;
-    // 左軸か右軸かを凡例に書く。上端に置くと目盛りと重なるため
-    const axis = series.key === 'l' ? '左' : '右';
+    // 3 行目: 色玉
+    const s = TABLE.swatch;
     parts.push(
-      `<line x1="${x.toFixed(1)}" y1="${legendY.toFixed(1)}" x2="${(x + 14).toFixed(1)}" ` +
-        `y2="${legendY.toFixed(1)}" stroke="${series.color}" stroke-width="2" />`,
-      `<text x="${(x + 18).toFixed(1)}" y="${legendY.toFixed(1)}" font-family="sans-serif" ` +
-        `font-size="${CHART.fontPx}" fill="#333" dominant-baseline="central">` +
-        `${series.label}(${axis})</text>`,
+      `<rect x="${(cx - s / 2).toFixed(1)}" y="${(rowY(2) - s * 0.78).toFixed(1)}" ` +
+        `width="${s}" height="${s}" ` +
+        `fill="${label.color === null ? '#ffffff' : bandColorCss(label.color)}" ` +
+        `stroke="rgba(0,0,0,0.55)" stroke-width="1" />`,
+    );
+    // 4 行目: カラーコード上の意味（読み取り値の表と同じ）
+    parts.push(
+      textElement(
+        cx,
+        rowY(3),
+        roleTexts[index] ?? '?',
+        Math.round(TABLE.fontPx * 0.9),
+        LABEL_COLOR,
+        1,
+      ),
     );
   });
 
@@ -463,6 +507,8 @@ export function buildAnnotationSvg(input: AnnotateInput): string {
   const nameOf = (color: Band['color']): string =>
     japanese ? BAND_COLOR_JA[color] : BAND_COLOR_ABBR[color];
 
+  // 写真に重ねる注釈。キャプション帯のぶん下へずらすので、まとめて 1 つの群にする
+  const onPhoto: string[] = [];
   const parts: string[] = [];
   const box = input.box;
 
@@ -473,7 +519,7 @@ export function buildAnnotationSvg(input: AnnotateInput): string {
     // 注釈は水平な抵抗器なら下、垂直なら右に出す
     const side = labelSide(box);
 
-    parts.push(
+    onPhoto.push(
       `<polygon points="${points(boxCorners(box))}" fill="none" stroke="${BOX_COLOR}" ` +
         `stroke-width="${Math.max(2, Math.round(box.thickness / 16))}" />`,
     );
@@ -484,7 +530,7 @@ export function buildAnnotationSvg(input: AnnotateInput): string {
       const opacity = isDropped ? 0.5 : 1;
 
       // バンドの占める範囲（塗らない。色帯そのものを隠さないため）
-      parts.push(
+      onPhoto.push(
         `<polygon points="${points(bandCorners(box, input.rectify, band))}" ` +
           `fill="none" stroke="${isDropped ? DROPPED_COLOR : bandColorCss(band.color)}" ` +
           `stroke-width="2" ${isDropped ? 'stroke-dasharray="4 3"' : ''} />`,
@@ -492,26 +538,128 @@ export function buildAnnotationSvg(input: AnnotateInput): string {
 
       // 番号はバンドのすぐ外側。色空間の面に出る番号と対応する
       const number = labelAnchor(box, input.rectify, band, numberOffset(fontPx), side);
-      parts.push(
-        textElement(number.x, number.y, String(index + 1), fontPx, BOX_COLOR, opacity),
-      );
+      onPhoto.push(textElement(number.x, number.y, String(index + 1), fontPx, BOX_COLOR, opacity));
 
       // 色名と意味は写真に重ねず、下の一覧表に出す（詰まると重なって読めないため）
     });
   }
 
-  parts.push(
-    `<rect x="0" y="0" width="${input.width}" height="${CAPTION_HEIGHT}" fill="rgba(0,0,0,0.66)" />`,
-    `<text x="6" y="18" font-family="monospace" font-size="14" fill="#fff">` +
-      `${escapeXml(input.caption)}</text>`,
-  );
+  const lines = captionLines(input.caption, input.width);
+  const captionHeight = lines.length * CAPTION_LINE_HEIGHT;
 
-  const tableTop = input.height + (input.labelOverflow?.bottom ?? 0);
-  parts.push(buildBandTableSvg(input, nameOf, tableTop));
-  // グラフは表の右。X 軸が抵抗器の長さ方向なので、表の番号と並びが対応する
+  // 写真の注釈は帯のぶん下へ。写真そのものは合成側で同じだけ下に置く
+  parts.push(`<g transform="translate(0,${captionHeight})">${onPhoto.join('')}</g>`);
+
+  // キャプションは写真に重ねず、上の帯に独立した文字列として置く。
+  // 幅に収まらなければ折り返す（切り詰めると期待値や確信度が読めなくなる）
   parts.push(
-    buildProfileChartSvg(input, tableWidthFor(input.bands.length) + CHART.padding, tableTop),
+    `<rect x="0" y="0" width="${input.width}" height="${captionHeight}" fill="#f2f2f2" ` +
+      `stroke="rgba(0,0,0,0.25)" stroke-width="1" />`,
   );
+  lines.forEach((line, index) => {
+    const y = index * CAPTION_LINE_HEIGHT + CAPTION_LINE_HEIGHT / 2;
+    parts.push(
+      `<text x="${CAPTION_PADDING}" y="${y.toFixed(1)}" font-family="monospace" ` +
+        `font-size="${CAPTION_FONT_PX}" fill="#111" dominant-baseline="central">` +
+        `${escapeXml(line)}</text>`,
+    );
+  });
+
+  const pick = (title: { ja: string; en: string }): string => (japanese ? title.ja : title.en);
+  const tableTop = captionHeight + input.height + (input.labelOverflow?.bottom ?? 0);
+  parts.push(buildBandTableSvg(input, nameOf, pick(SECTION_TITLES.table), tableTop));
+
+  // 期待値の表は読み取り値の表の真下（人手で確定した境界があるときだけ）
+  const expectedTop = tableTop + tableHeightFor(input.bands.length);
+  if (input.labels !== undefined && input.labels.length > 0) {
+    parts.push(
+      buildExpectedTableSvg(input.labels, nameOf, pick(SECTION_TITLES.expected), expectedTop),
+    );
+  }
+
+  // グラフは表の下に、幅いっぱいの段として積む。X 軸は抵抗器の長さ方向なので
+  // ラン境界が写真・表の番号と対応する
+  const profile = input.profile;
+  if (profile !== undefined && profile.samples.length > 0) {
+    const samples = profile.samples;
+    const derived = differentiate(samples);
+    /** L* は左軸、a* と b* は右軸（値域が桁違いなので分ける）。 */
+    const labSeries = (source: readonly ProfileSample[]): ChartSeries[] => [
+      {
+        label: 'L*',
+        color: SERIES_COLOR.l,
+        axis: 'left',
+        values: source.map((s) => s.lab.l),
+      },
+      {
+        label: 'a*',
+        color: SERIES_COLOR.a,
+        axis: 'right',
+        values: source.map((s) => s.lab.a),
+      },
+      {
+        label: 'b*',
+        color: SERIES_COLOR.b,
+        axis: 'right',
+        values: source.map((s) => s.lab.b),
+      },
+    ];
+    const data = {
+      count: samples.length,
+      extent: profile.extent,
+      runs: profile.runs,
+      dropped: new Set(input.droppedRuns ?? []),
+      roiPadding: input.rectify.padding ?? 0,
+      ...(input.labels === undefined ? {} : { labels: input.labels }),
+    };
+    const stripTop = expectedTop + expectedTableHeightFor(input.labels);
+    const stripHeight = input.strip === undefined ? 0 : stripBlockHeight();
+    if (input.strip !== undefined) {
+      // 水平化・色補正した ROI。Lab グラフと X 軸を共有するので、グラフの
+      // 0% / 100% の破線がそのまま画像上の本体の端になる
+      parts.push(
+        buildRoiStripSvg(
+          input.strip,
+          { left: 0, top: stripTop, width: input.width },
+          { title: pick(SECTION_TITLES.strip) },
+        ),
+      );
+    }
+
+    const labTop = stripTop + stripHeight;
+    const absTop = labTop + chartBlockHeight();
+    parts.push(
+      buildChartSvg(
+        { ...data, series: labSeries(samples) },
+        { left: 0, top: labTop, width: input.width },
+        { title: pick(SECTION_TITLES.lab), showRunNumbers: true },
+      ),
+      // abs は 3 成分の絶対値の和。明度だけ・色みだけが動く境界のどちらも
+      // 1 本で拾えるので、バンドの縁の強さをまとめて見るのに使う。
+      // Lab 微分と重ねると値域が違って潰れるので、別のプレーンに分ける
+      buildChartSvg(
+        {
+          ...data,
+          series: [
+            {
+              label: 'abs',
+              color: SERIES_COLOR.abs,
+              axis: 'left' as const,
+              values: absoluteSum(samples),
+            },
+          ],
+        },
+        { left: 0, top: absTop, width: input.width },
+        { title: pick(SECTION_TITLES.abs), showRunNumbers: false, subtitle: ABS_FORMULA },
+      ),
+      // 微分は段差の位置に山が立つ。ラン境界が値のどの変化に対応するかを見る
+      buildChartSvg(
+        { ...data, series: labSeries(derived) },
+        { left: 0, top: absTop + chartBlockHeight(), width: input.width },
+        { title: pick(SECTION_TITLES.derivative), showRunNumbers: false },
+      ),
+    );
+  }
 
   const panelTop = tableTop + blockHeightFor(input);
   const panelHeight = panelHeightFor(input, input.width);

@@ -1,5 +1,5 @@
 import { BAND_REFERENCE_COLORS } from './color/colors.js';
-import type { BandColor, LabColor } from '../types.js';
+import type { BandColor, LabColor, ProfileSample } from '../types.js';
 import { alignRunsToBands } from './bands/align.js';
 import { DEFAULT_PALETTE, type Palette } from './color/palette.js';
 
@@ -139,6 +139,88 @@ export function matchRunsToValue(
   return null;
 }
 
+/** バンドが占める列の範囲（`Band` をそのまま渡せる形）。 */
+export interface BandRange {
+  readonly start: number;
+  readonly end: number;
+}
+
+/** 1 本のバンドから取る観測の数。 */
+const CALIBRATION_SAMPLES = 3;
+
+/**
+ * 並びを {@link CALIBRATION_SAMPLES} 個の区間に割る。
+ *
+ * 幅が足りず空になる区間には、その位置にいちばん近い 1 サンプルを充てる。
+ * **細いバンドでも必ず同じ数の観測を返す**ようにして、「校正したのに
+ * 件数が足りず採用されない」を起こさないため。
+ */
+function thirds(samples: readonly ProfileSample[]): ProfileSample[][] {
+  const total = samples.length;
+  return Array.from({ length: CALIBRATION_SAMPLES }, (_unused, index) => {
+    const from = Math.floor((index * total) / CALIBRATION_SAMPLES);
+    const to = Math.floor(((index + 1) * total) / CALIBRATION_SAMPLES);
+    if (to > from) return samples.slice(from, to);
+    const nearest = Math.min(from, total - 1);
+    return samples.slice(nearest, nearest + 1);
+  });
+}
+
+/** サンプル群の代表色（各成分の中央値）。 */
+function medianLab(samples: readonly ProfileSample[]): LabColor {
+  return {
+    l: medianOf(samples.map((one) => one.lab.l)),
+    a: medianOf(samples.map((one) => one.lab.a)),
+    b: medianOf(samples.map((one) => one.lab.b)),
+  };
+}
+
+/**
+ * 人が選んだ正解色を、その場の実写 Lab と結びつけて観測にする（色校正）。
+ *
+ * 値からの逆算（{@link matchRunsToValue}）と違い、**色名を直接教える**経路。
+ * 値が分からない抵抗でも較正でき、対応付けの当たり外れも挟まらない。
+ *
+ * 1 本につき **{@link CALIBRATION_SAMPLES} 点**取る。バンドを前・中・後に
+ * 割って区間ごとの中央値を拾うので、端の混色や照明の勾配といった実写の
+ * ばらつきが観測に入る（同じ値を 3 つ複製するのとは違う）。1 回の校正で
+ * {@link DEFAULT_MIN_SAMPLES} に届くため、校正した色はその場で効く。
+ *
+ * **プロファイルは色順応補正後のものを渡すこと**（`AnalysisResult.profile`）。
+ * 分類が比較しているのと同じ色空間でないと、学んだ基準色が実際の観測と
+ * 対応しなくなる（「変換と palette は密結合」）。
+ *
+ * 金・銀もそのまま観測にする。採用しないのは {@link paletteOverrides} の
+ * 役目で、保存の段階で分けると値からの学習と挙動がずれる。
+ *
+ * @param profile 補正後の 1D プロファイル（ROI 全体ぶん）
+ * @param bands 分類済みバンドの範囲。列番号は ROI 基準
+ * @param colors 人が選んだ正解色。`bands` と同じ並び・同じ本数
+ */
+export function calibrationAssignments(
+  profile: readonly ProfileSample[],
+  bands: readonly BandRange[],
+  colors: readonly BandColor[],
+): Assignment[] {
+  // 本数が食い違うなら、どの色がどのバンドか決められない。黙って一部だけ
+  // 学習すると取り違えたまま蓄積されるので、何もしない
+  if (bands.length !== colors.length) return [];
+
+  const assignments: Assignment[] = [];
+  bands.forEach((band, index) => {
+    const color = colors[index];
+    if (color === undefined) return;
+
+    const samples = profile.filter((one) => one.x >= band.start && one.x < band.end);
+    if (samples.length === 0) return;
+
+    for (const part of thirds(samples)) {
+      assignments.push({ color, lab: medianLab(part) });
+    }
+  });
+  return assignments;
+}
+
 /** 色ごとの実写 Lab の蓄積。 */
 export type Observations = Partial<Record<BandColor, readonly LabColor[]>>;
 
@@ -173,8 +255,31 @@ function medianOf(values: readonly number[]): number {
 const MAX_REFERENCE_DRIFT = 60;
 
 /**
+ * 学習の対象にしない色（金属色）。
+ *
+ * 金・銀の見え方は色順応補正のアンカー（本体色）に依存して**二峰性**になる。
+ * 人手で確定した境界から実測すると、銀は青ボディで L\*81 b\*+17（温色）、
+ * ベージュボディで L\*134 b\*-16（寒色）に写った。絶対 Lab の 1 点では
+ * どちらかにしか合わず、実際に学習させると:
+ *
+ * - 金だけ学習: 学んだ金 L\*75 a\*5 b\*29 が既定の銀 L\*78 a\*0 b\*0 の隣に来て、
+ *   `05-7.5ohm` の銀が金と読まれ ×10 ずれ（7.5Ω → 75Ω）
+ * - 対でそろえて学習: 学んだ銀 L\*110 b\*-11 が実写の白 L\*104 b\*-11 に重なり、
+ *   `15-339ohm` の白が銀と読まれ ×100 ずれ（339Ω → 330mΩ）。05 も直らない
+ *
+ * どちらも誤答が増えるだけで得るものが無い（43 枚で 誤答 0 → 2）。
+ * 金属色の分類を直すなら、絶対値ではなく**本体色との相対**でやること。
+ */
+export const UNLEARNABLE_COLORS: readonly BandColor[] = ['gold', 'silver'];
+
+/**
  * 観測から基準色の上書きを作る（各成分の中央値）。
- * 件数が足りない色と、既定値からかけ離れた色は上書きしない。
+ *
+ * 上書きしないもの:
+ *
+ * - 件数が足りない色
+ * - 既定値からかけ離れた色（{@link MAX_REFERENCE_DRIFT}）
+ * - 金属色（{@link UNLEARNABLE_COLORS}）
  */
 export function paletteOverrides(
   observations: Observations,
@@ -185,6 +290,7 @@ export function paletteOverrides(
     BandColor,
     readonly LabColor[],
   ][]) {
+    if (UNLEARNABLE_COLORS.includes(color)) continue;
     if (samples.length < minSamples) continue;
     const learned = {
       l: medianOf(samples.map((lab) => lab.l)),

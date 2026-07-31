@@ -70,6 +70,46 @@ export function formatOhms(ohms: number): string {
   return `${trimNumber(ohms / unit.threshold)}${unit.suffix}Ω`;
 }
 
+/**
+ * 読み取りに必要な本体の太さ [px]。これを割る検出枠からは値を出さない。
+ *
+ * **絶対の画素数で見るのが正しい。** センサが被写体に何画素当てられているかの
+ * 話で、画面に対する割合ではない（遠くの抵抗器でも 4K なら画素は足りる）。
+ *
+ * 48 枚の実測では**正解の最小の太さが 54px**で、それ未満は 1 枚も正解していない。
+ *
+ * | 太さ [px] | 検体 | 判定 |
+ * | ---- | ---- | ---- |
+ * | 4 | `43-4.7kohm` | 保留（104×384 の画像に 25×4 の枠） |
+ * | 12 | `52-39kohm` | 保留（76×552 の画像に 45×12 の枠） |
+ * | 22 | `09-82ohm` | 保留 |
+ * | 25 | `49-18kohm` | **誤答** |
+ * | 30 / 36 / 38 | `46` / `51` / `41` | 保留 |
+ * | 54 以上 | 32 枚 | すべて正解 |
+ *
+ * 太さ 12px の枠ではバンド 1 本が 3px しかなく、`rectify` はそれを 3〜6 倍に
+ * **拡大**して 40px の ROI を作る — 情報は 1 つも増えない。
+ *
+ * 38（保留の最大）と 54（正解の最小）の間は空白なので、その中央を採る。
+ * 空白の位置は検体に敏感なので、端に寄せず内側の丸い値にする
+ * （{@link MIN_REPORTABLE_CONFIDENCE} と同じ作法）。
+ *
+ * **検出側ではなく読み取り側の方針として置く。** 細い枠を見つけたこと自体は
+ * 検出の誤りではないので `locate` は素直に返し、値を出すかどうかをここで決める。
+ */
+export const MIN_READABLE_THICKNESS = 46;
+
+/**
+ * その検出枠は値を出せる解像度か。
+ * 満たさないときは「?」を出す（誤った値を自信ありげに出さない、設計メモ §2 [5]）。
+ */
+export function isReadableSize(
+  box: { readonly thickness: number } | null,
+  minThickness = MIN_READABLE_THICKNESS,
+): boolean {
+  return box !== null && box.thickness >= minThickness;
+}
+
 /** 確信度が十分で、値として表示してよい読み取りかどうか。 */
 export function isReportable(
   reading: ResistorReading | null,

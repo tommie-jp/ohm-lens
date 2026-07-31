@@ -1,8 +1,9 @@
+import type { ScanProfileOptions } from './bands/profile.js';
 import type { OrientedBox } from './locate.js';
 import type { AnalyzeOptions } from './pipeline.js';
 import type { RectifyOptions } from './rectify.js';
 import type { RefineOptions } from './refine.js';
-import { bodyColumns } from './roiMapping.js';
+import { bodyColumns, bodyRows } from './roiMapping.js';
 import { DEFAULT_PALETTE, type Palette } from './color/palette.js';
 
 /**
@@ -70,6 +71,63 @@ const CLUSTER_DELTA_E = 24;
 /** これ未満の幅のランはノイズとして捨てる。掃引では 2 が全域で最良。 */
 const MIN_BAND_WIDTH = 2;
 
+/**
+ * 明度だけで切れ目とみなすマージン（`splitRuns` の `lightnessMargin`）。
+ *
+ * **無効のまま。有効にすると誤答が増える。** 金・銀は本体と色相が同じで明度
+ * だけ違うので `EDGE_DELTA_E = 20` の切れ目にかからず、ランとして切られない
+ * まま本体に溶けている。人手で確定した境界（`sample/boundaries.json` の 21 枚・
+ * バンド 89 本）で測ると、失われた 15 本のうち 14 本が分割の段階で消えていた。
+ *
+ * この基準を足すと**分割の段階は実際に直る**（正解 81 本のうち切れた本数が
+ * 63 → 76）。ところが最終的な値は良くならない。二度測って二度とも悪化した:
+ *
+ * 1. 切ったランが本体クラスタに吸収され直す（凹み除外の絞り 0.85 では
+ *    金の距離 4〜11 を弾けない）。絞りを 0 にすると影のランが暴発する
+ *    （余分 9 → 21〜29）
+ * 2. 金属容疑の安全弁（`jointDecode` の `bodyLab`）を入れた後の再掃引でも、
+ *    バンド一致は最大 +1 に対し正解 32 → 30〜31 か誤答増
+ *
+ * ラン数の回復は分割ではなく**位置を絞った拾い直し**（`RECOVER_DELTA_E`）で
+ * 行う。経緯は `docs/13-バンド境界の検出指標.md` §11〜§12。
+ */
+const LIGHTNESS_MARGIN = Number.POSITIVE_INFINITY;
+
+/**
+ * 位置を絞った拾い直し（`bands/recover.ts`）の、本体色との差のしきい値。
+ *
+ * 既定の 9 から**大きく下げる**。金は本体との CIE76 が 4〜11 しかなく、
+ * 9 では半分が拾えない。かつては「下げると誤答が増える」ため 9 で止めていた
+ * （ΔE 5 で正解 26 — `docs/11` §3.5）が、それは拾った弱いランが数字として
+ * デコードに入っていたから。**金属容疑の安全弁**（`jointDecode` の `bodyLab`、
+ * 本体に近いランは倍率・許容差の金・銀にしかならず、捨てるのはタダ）を
+ * 入れた後は、下げても値が 1 つも動かない。43 枚 / 正解 155 本での掃引:
+ *
+ * | しきい値 | バンド一致 | 余分 | 正解/誤答 |
+ * | ------ | ------ | ------ | ------ |
+ * | 9（旧） | 130 | 11 | 32/1 |
+ * | 4 | 143 | 11 | 32/1 |
+ * | **3** | **145** | **9** | 32/1 |
+ * | 2.5 | 144 | 10 | 32/1 |
+ * | 2 | 141 | 13 | 32/1 |
+ *
+ * 安全弁なしだと ΔE3 で正解 30・誤答 2 に落ちる。**この値は安全弁とセット。**
+ * 3 が頂点で、2 以下は窓内の雑音を拾って崩れ始める。
+ * （表の 誤答 1 は `isReadableSize` の門を通さない測り方によるもので、
+ * 門を通す `doDetect.sh` では全設定で誤答 0）
+ */
+const RECOVER_DELTA_E = 3;
+
+/**
+ * 走査線を並べる範囲を本体からどれだけ内側に絞るか（本体の太さに対する割合）。
+ *
+ * **0（本体そのもの）が最良。** 円筒の肩を通る走査線を避けるつもりで内側へ
+ * 絞ると落ちる（0 → 正解 32、-0.10 → 31、-0.15 → 31・誤答 6、-0.20 → 30・
+ * 誤答 7、-0.25 → 24）。絞ると 1 走査線あたりの行数が減り、推定が痩せるため。
+ * 肩は主犯ではない。
+ */
+const SCAN_ROW_MARGIN = 0;
+
 /** ROI の切り出し条件。 */
 export const ROI_OPTIONS: RectifyOptions = { padding: ROI_PADDING, targetHeight: 40 };
 
@@ -84,8 +142,24 @@ export const SEGMENT_THRESHOLDS = {
   edgeDeltaE: EDGE_DELTA_E,
   clusterDeltaE: CLUSTER_DELTA_E,
   minBandWidth: MIN_BAND_WIDTH,
+  lightnessMargin: LIGHTNESS_MARGIN,
   bodyLightnessWeight: BODY_LIGHTNESS_WEIGHT,
 } as const;
+
+/**
+ * 走査線の条件。本体の行範囲を検出結果から渡す。
+ *
+ * **較正（`tests/fixtures/calibrate.test.ts`）もこれを使うこと。** サンプリングが
+ * 本番とずれると、学習したパレットが本番の観測値と対応しなくなる
+ * （「変換と palette は密結合」— `docs/09-色空間と色差指標の検討.md`）。
+ * 較正が意図的に変えてよいのは本体範囲の余白と `keepEdgeRuns` だけ。
+ */
+export function scanProfileOptions(
+  box: OrientedBox,
+  rectifyOptions: RectifyOptions = ROI_OPTIONS,
+): ScanProfileOptions {
+  return { bodyRows: bodyRows(box, rectifyOptions, SCAN_ROW_MARGIN) };
+}
 
 /** 検出枠をカラーコードの並びで広げ直すときの条件。 */
 export function refineOptions(palette: Palette = DEFAULT_PALETTE): RefineOptions {
@@ -101,6 +175,9 @@ export function refineOptions(palette: Palette = DEFAULT_PALETTE): RefineOptions
  * `bodyExtent` によるプロファイルからの推定は 39 枚中 25 枚で外れていた
  * （広すぎ 10・狭すぎ 15）。広すぎれば背景がバンドになり、狭すぎれば端の
  * バンドが消える。検出側が本体の位置を持っているので、そちらを信じる。
+ *
+ * 短軸側（`profile.bodyRows`）も同じ理由で検出結果から渡す。ROI 全体を
+ * 等分すると走査線の両端が本体の外（背景・リード線）に落ちる。
  */
 export function analyzeOptions(
   box: OrientedBox,
@@ -109,6 +186,8 @@ export function analyzeOptions(
   return {
     segment: { palette, ...SEGMENT_THRESHOLDS },
     bodyRange: bodyColumns(box, ROI_OPTIONS, BODY_MARGIN),
+    profile: scanProfileOptions(box),
     adaptWhiteBalance: ADAPT_WHITE_BALANCE,
+    recover: { deltaE: RECOVER_DELTA_E },
   };
 }

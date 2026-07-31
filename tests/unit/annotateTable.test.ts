@@ -5,6 +5,7 @@ import {
   tableHeightFor,
   type AnnotateInput,
 } from '../../src/annotate/render.js';
+import { chartPlotHeight } from '../../src/annotate/profileChart.js';
 import type { Band } from '../../src/types.js';
 import type { OrientedBox } from '../../src/core/locate.js';
 
@@ -147,7 +148,7 @@ describe('中心線プロファイルのグラフ', () => {
     expect(height).toBeGreaterThan(tableHeightFor(3));
   });
 
-  it('L* / a* / b* の 3 本を折れ線で描く', () => {
+  it('L* / a* / b* の 3 本を折れ線で描く（Lab 3 + 微分 3 + abs 1 で 7 本）', () => {
     // Arrange
     const input = inputOf({ width: 800, profile: profileOf(40) });
 
@@ -155,7 +156,7 @@ describe('中心線プロファイルのグラフ', () => {
     const svg = buildAnnotationSvg(input);
 
     // Assert
-    expect(svg.split('<polyline').length - 1).toBe(3);
+    expect(svg.split('<polyline').length - 1).toBe(7);
     expect(svg).toContain('>L*(左)<');
     expect(svg).toContain('>a*(右)<');
     expect(svg).toContain('>b*(右)<');
@@ -170,8 +171,8 @@ describe('中心線プロファイルのグラフ', () => {
   });
 
   it('幅が足りなければグラフを省く（表とパネルを壊さない）', () => {
-    // Arrange: 表だけで埋まる細いキャンバス
-    const svg = buildAnnotationSvg(inputOf({ width: 200, profile: profileOf(40) }));
+    // Arrange: グラフは幅いっぱいの段なので、目盛りの左右幅も取れない細さで試す
+    const svg = buildAnnotationSvg(inputOf({ width: 120, profile: profileOf(40) }));
 
     // Assert
     expect(svg).not.toContain('<polyline');
@@ -179,12 +180,12 @@ describe('中心線プロファイルのグラフ', () => {
   });
 
   it('ランの通し番号をグラフにも重ねる（写真・表と同じ番号）', () => {
-    // Arrange: 番号は 写真 + 表 + グラフ の 3 か所に出る
+    // Arrange: 番号は 写真 + 表 + Lab グラフ の 3 か所。微分グラフには出さない
     const withChart = buildAnnotationSvg(inputOf({ width: 800, profile: profileOf(40) }));
     const withoutChart = buildAnnotationSvg(inputOf({ width: 800 }));
 
-    // Act
-    const countIn = (svg: string): number => svg.split('>1<').length - 1;
+    // Act: 目盛りの数字と紛れないよう、番号の色（赤）で数える
+    const countIn = (svg: string): number => svg.split('fill="#ff3b30">1<').length - 1;
 
     // Assert
     expect(countIn(withoutChart)).toBe(2);
@@ -246,7 +247,79 @@ describe('中心線プロファイルのグラフ', () => {
     // Assert: どちらも同じ高さ（プロット高の 80%）を使う
     expect(spanOf(chromaYs)).toBeCloseTo(spanOf(lightnessYs), 1);
     // 最大値が 10%、最小値が 90% の位置なので、使う高さは 80%
-    const plotHeight = 150 - 10 * 2 - 11;
-    expect(spanOf(lightnessYs)).toBeCloseTo(plotHeight * 0.8, 1);
+    expect(spanOf(lightnessYs)).toBeCloseTo(chartPlotHeight() * 0.8, 1);
+  });
+});
+
+/**
+ * 表の見出しに添える抵抗値。
+ *
+ * 色名と意味だけでは「結局いくつなのか」がすぐに読めない。読み取り値と
+ * 期待値の両方に値を出せば、2 つの見出しを見比べるだけで誤読が分かる。
+ */
+describe('見出しの抵抗値', () => {
+  it('読み取り値の表の見出しに値を添える', () => {
+    // Arrange / Act
+    const svg = buildAnnotationSvg(inputOf({ readingOhms: 100, readingConfident: true }));
+
+    // Assert
+    expect(svg).toContain('>カラーコード読み取り値<');
+    expect(svg).toContain('>100Ω<');
+  });
+
+  it('確信度が足りない読み取りは「(保留)」を付ける', () => {
+    const svg = buildAnnotationSvg(inputOf({ readingOhms: 100, readingConfident: false }));
+
+    expect(svg).toContain('>100Ω(保留)<');
+  });
+
+  it('値が出せなかったときは「読取不可」', () => {
+    const svg = buildAnnotationSvg(inputOf({ readingOhms: null }));
+
+    expect(svg).toContain('>読取不可<');
+  });
+
+  it('値を渡さなければ見出しに何も添えない', () => {
+    const svg = buildAnnotationSvg(inputOf());
+
+    expect(svg).toContain('>カラーコード読み取り値<');
+    expect(svg).not.toContain('>読取不可<');
+  });
+
+  it('期待値の表の見出しには色列から復号した値を添える', () => {
+    // Arrange: 画像上は 金-橙-赤-灰。逆向き 灰-赤-橙-金 = 82kΩ が成立する
+    const svg = buildAnnotationSvg(
+      inputOf({
+        labels: [
+          { color: 'gold' as const, start: 19, end: 25 },
+          { color: 'orange' as const, start: 47, end: 53 },
+          { color: 'red' as const, start: 65, end: 71 },
+          { color: 'grey' as const, start: 80, end: 86 },
+        ],
+      }),
+    );
+
+    // Assert
+    expect(svg).toContain('>カラーコード期待値<');
+    expect(svg).toContain('>82kΩ<');
+  });
+
+  it('色が確定していない期待値は「?」', () => {
+    // Arrange / Act
+    const svg = buildAnnotationSvg(
+      inputOf({
+        labels: [
+          { color: null, start: 19, end: 25 },
+          { color: 'orange' as const, start: 47, end: 53 },
+          { color: 'red' as const, start: 65, end: 71 },
+          { color: 'grey' as const, start: 80, end: 86 },
+        ],
+      }),
+    );
+
+    // Assert: 見出しに添える文字（薄いグレーの等幅）が「?」であること。
+    // 表の中の「?」と紛れないよう、体裁ごと見る
+    expect(svg).toContain('>カラーコード期待値<');
+    expect(svg).toMatch(/font-family="monospace"[^>]*fill="#555"[^>]*>\?</);
   });
 });

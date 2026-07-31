@@ -1,6 +1,8 @@
 import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { basename, extname, join } from 'node:path';
 import { annotateImage } from '../src/annotate/pipeline.js';
+import { formatShare, runVerdict, type RunVerdict } from '../src/annotate/read.js';
+import type { BandInterval, BoundaryLabels } from '../src/core/bands/boundaries.js';
 import { DEFAULT_PALETTE, withOverrides, type Palette } from '../src/core/color/palette.js';
 import type { BandColor, LabColor } from '../src/types.js';
 
@@ -89,6 +91,24 @@ function loadExpected(inDir: string): Map<string, number> {
   return map;
 }
 
+/**
+ * 人手で確定した境界（`boundaries.json`）があれば読む。
+ *
+ * `verified: true` のものだけを渡す。種（推定値）を重ねても、検出そのものを
+ * 描き写すだけで意味がない。
+ */
+function loadBoundaries(inDir: string): Map<string, BandInterval[]> {
+  const path = join(inDir, 'boundaries.json');
+  const map = new Map<string, BandInterval[]>();
+  if (!existsSync(path)) return map;
+
+  const parsed = JSON.parse(readFileSync(path, 'utf-8')) as BoundaryLabels;
+  for (const [file, label] of Object.entries(parsed)) {
+    if (label.verified) map.set(file, [...label.bands]);
+  }
+  return map;
+}
+
 /** 学習済みパレットがあれば使う（GUI と同じ結果になるように）。 */
 function loadPalette(inDir: string): Palette {
   const path = join(inDir, 'palette.json');
@@ -118,6 +138,7 @@ async function main(): Promise<void> {
 
   const expected = loadExpected(args.inDir);
   const palette = loadPalette(args.inDir);
+  const boundaries = loadBoundaries(args.inDir);
 
   const files = readdirSync(args.inDir)
     .filter((name) => EXTENSIONS.has(extname(name).toLowerCase()))
@@ -141,6 +162,9 @@ async function main(): Promise<void> {
   let wrong = 0;
   let held = 0;
   let failed = 0;
+  /** ラン数が人手で確定した本数と合っているか（値の正誤とは別の指標）。 */
+  const runs: Record<RunVerdict, number> = { same: 0, fewer: 0, more: 0 };
+  let runJudged = 0;
 
   for (const [index, file] of files.entries()) {
     const progress = `${String(index + 1).padStart(String(files.length).length)}/${files.length}`;
@@ -151,6 +175,7 @@ async function main(): Promise<void> {
         palette,
         japanese: args.japanese,
         ...(ohms === undefined ? {} : { expectedOhms: ohms }),
+        ...(boundaries.has(file) ? { labels: boundaries.get(file) as BandInterval[] } : {}),
       });
 
       const name = `${basename(file, extname(file))}.detect.jpg`;
@@ -162,6 +187,12 @@ async function main(): Promise<void> {
       if (result.ohms === null || !result.confident) held += 1;
       else if (result.correct) reported += 1;
       else wrong += 1;
+      // ラン数は人手で確定した境界がある写真だけで測る
+      const truth = boundaries.get(file);
+      if (truth !== undefined) {
+        runJudged += 1;
+        runs[runVerdict(result.runCount, truth.length)] += 1;
+      }
       captions.push(result.caption);
       console.log(`${progress} ${result.correct ? '○' : result.located ? '△' : '×'} ${result.caption}`);
     } catch (error) {
@@ -181,7 +212,21 @@ async function main(): Promise<void> {
   );
   if (withExpected > 0) {
     // 誤った値を自信ありげに出さない方針なので、誤答が何件残るかが要点
-    console.log(`実機での見え方: 正解 ${reported} / 誤答 ${wrong} / 保留 ${held}`);
+    // 正解率の分母は三分した総数（正解 + 誤答 + 保留）。保留も「出せなかった」ぶん率を下げる。
+    const judged = reported + wrong + held;
+    const share = (part: number): string => formatShare(part, judged);
+    // ラン数は「値が当たったか」とは別の指標。値が保留でも本数が合っていれば
+    // 分割は正しく、本数が違えば値が当たっていても偶然を疑う
+    const runShare = (part: number): string => formatShare(part, runJudged);
+    // 分母が違えば書き添える（人手で確定した境界が全枚数に無いとき）
+    const scope = runJudged === judged ? '' : `(${runJudged} 枚中)`;
+    console.log(
+      `実機での見え方: 正解 ${share(reported)} / 誤答 ${share(wrong)} / 保留 ${share(held)}` +
+        (runJudged === 0
+          ? ''
+          : `, ラン数${scope} 正解 ${runShare(runs.same)}` +
+            ` / 少ない ${runShare(runs.fewer)} / 多い ${runShare(runs.more)}`),
+    );
   }
   console.log(`出力: ${args.outDir}（summary.txt に一覧）`);
 }

@@ -1,4 +1,4 @@
-import type { Band, ProfileSample } from '../../types.js';
+import type { Band, LabColor, ProfileSample } from '../../types.js';
 import { classifyBandColor } from './classify.js';
 import { DEFAULT_PALETTE, type Palette } from '../color/palette.js';
 import { identifyBody, splitRuns, type ColorRun } from './runs.js';
@@ -18,6 +18,11 @@ export interface SegmentOptions {
   readonly edgeDeltaE?: number;
   /** これ未満の幅のランはノイズとして捨てる */
   readonly minBandWidth?: number;
+  /**
+   * ランの平均から明度だけがこれ以上離れたら切れ目とみなす。
+   * ΔE では切れない金・銀を拾うための第二の基準（`runs.ts` の `splitRuns`）。
+   */
+  readonly lightnessMargin?: number;
   /** 同じ色のランとみなす ΔE（本体ランをまとめるのに使う） */
   readonly clusterDeltaE?: number;
   /**
@@ -25,6 +30,17 @@ export interface SegmentOptions {
    * 円筒の陰影で暗くなった本体を本体として拾うために下げる。
    */
   readonly bodyLightnessWeight?: number;
+  /**
+   * 前後のランよりこれ以上明度が凹んでいれば、陰影ではなくバンドとみなす。
+   * 明度の緩和（`bodyLightnessWeight`）が金・銀を本体へ吸い込むのを防ぐ。
+   */
+  readonly bodyExtremumMargin?: number;
+  /**
+   * 凹みと判定したランを本体に取り込むときの、しきい値の絞り込み（0..1）。
+   * 0 で「凹みは決して本体にしない」。金の凹みは本体との距離が 4〜11 と
+   * 近すぎるため、0.85 程度の絞りでは吸収を防げない。
+   */
+  readonly bodyExtremumTolerance?: number;
   /** バンド色の基準テーブル。較正結果を差し替えられる。 */
   readonly palette?: Palette;
   /**
@@ -43,6 +59,26 @@ export interface SegmentOptions {
 }
 
 /**
+ * ラン抽出の途中経過。
+ *
+ * 本数が合わないとき、**どの段でランが消えたか**が分からないと打ち手を選べない。
+ * 「分割で切れていない」のと「本体に吸収された」のと「端として落とした」のでは
+ * 直す場所がまるで違う（`scripts/scoreBoundaries.ts` で正解と突き合わせる）。
+ */
+export interface BandRunStages {
+  /** 本体の代表色。特定できなければ null。金属容疑の判定（jointDecode）に使う */
+  readonly bodyLab: LabColor | null;
+  /** 色の切れ目で分割した直後（本体も含む） */
+  readonly split: readonly ColorRun[];
+  /** 本体クラスタを除いたもの */
+  readonly afterBody: readonly ColorRun[];
+  /** 隣り合う同色をまとめたもの */
+  readonly merged: readonly ColorRun[];
+  /** 端に接するランを落としたもの（＝{@link bandRuns} の返り値） */
+  readonly trimmed: readonly ColorRun[];
+}
+
+/**
  * 本体を除いた「バンド候補」のランを取り出す（分類はしない）。
  *
  * 1. 色の切れ目でランに分割する
@@ -58,13 +94,35 @@ export function bandRuns(
   profile: readonly ProfileSample[],
   options: SegmentOptions = {},
 ): ColorRun[] {
+  return [...bandRunStages(profile, options).trimmed];
+}
+
+/**
+ * {@link bandRuns} と同じ処理を、段階ごとの途中経過つきで返す。
+ *
+ * **診断が本番と違う道を通らないよう、`bandRuns` はこれを呼ぶ実装にしてある。**
+ * 診断用に処理を書き写すと、片方だけ直したときに測っているものがずれる。
+ */
+export function bandRunStages(
+  profile: readonly ProfileSample[],
+  options: SegmentOptions = {},
+): BandRunStages {
   const runs = splitRuns(profile, {
     ...(options.edgeDeltaE === undefined ? {} : { edgeDeltaE: options.edgeDeltaE }),
     ...(options.minBandWidth === undefined ? {} : { minRunLength: options.minBandWidth }),
+    ...(options.lightnessMargin === undefined ? {} : { lightnessMargin: options.lightnessMargin }),
   });
 
-  const body = identifyBody(runs, options.clusterDeltaE, options.bodyLightnessWeight);
-  if (body === null) return [];
+  const body = identifyBody(
+    runs,
+    options.clusterDeltaE,
+    options.bodyLightnessWeight,
+    options.bodyExtremumMargin,
+    options.bodyExtremumTolerance,
+  );
+  if (body === null) {
+    return { bodyLab: null, split: runs, afterBody: [], merged: [], trimmed: [] };
+  }
 
   // 端に接するランは捨てる。バンドの外側には必ず地の色があるので、
   // 解析範囲の端から始まるランは本体の肩の照り返しか、はみ出した背景。
@@ -72,9 +130,10 @@ export function bandRuns(
   const bodyRuns = new Set(body.runIndices);
   const first = (runs[0] as ColorRun).start;
   const last = (runs[runs.length - 1] as ColorRun).end;
-  const candidates = runs.filter((_, index) => !bodyRuns.has(index));
-  const merged = mergeAdjacent(candidates, options.mergeDeltaE ?? DEFAULT_MERGE_DELTA_E);
-  return options.keepEdgeRuns === true ? merged : trimEdgeRuns(merged, first, last);
+  const afterBody = runs.filter((_, index) => !bodyRuns.has(index));
+  const merged = mergeAdjacent(afterBody, options.mergeDeltaE ?? DEFAULT_MERGE_DELTA_E);
+  const trimmed = options.keepEdgeRuns === true ? merged : trimEdgeRuns(merged, first, last);
+  return { bodyLab: body.lab, split: runs, afterBody, merged, trimmed };
 }
 
 /**

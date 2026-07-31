@@ -2,13 +2,14 @@ import { describe, expect, it } from 'vitest';
 import {
   addObservations,
   expectedSequences,
+  calibrationAssignments,
   matchRunsToValue,
   paletteOverrides,
   type Observations,
 } from '../../src/core/learning.js';
 import { srgb255ToLab } from '../../src/core/color/colorSpace.js';
 import { BAND_SRGB } from '../../src/core/color/colors.js';
-import type { BandColor, LabColor } from '../../src/types.js';
+import type { BandColor, LabColor, ProfileSample } from '../../src/types.js';
 
 function labOf(color: BandColor): LabColor {
   const [r, g, b] = BAND_SRGB[color];
@@ -240,5 +241,192 @@ describe('addObservations / paletteOverrides', () => {
 
     // Assert
     expect(original.red).toHaveLength(1);
+  });
+});
+
+describe('金属色は学習しない', () => {
+  /**
+   * 金・銀の見え方は色順応補正のアンカー（本体色）に依存して**二峰性**になる。
+   * 銀は青ボディでは L*81 b*+17（温色）、ベージュボディでは L*134 b*-16（寒色）
+   * に写り、絶対 Lab の 1 点では表現できない。実際に学習させると
+   * 05（銀→金で ×10 ずれ）と 15（白→銀で ×100 ずれ）が誤答になった。
+   * 対でそろえて学習しても同じなので、金属色はパレットに入れない。
+   */
+
+  function samplesOf(lab: LabColor, count: number): LabColor[] {
+    return Array.from({ length: count }, () => lab);
+  }
+
+  const GOLD: LabColor = { l: 75, a: 5, b: 29 };
+  const SILVER: LabColor = { l: 74, a: 0, b: 2 };
+
+  it('金は件数が足りても学習しない', () => {
+    // Arrange
+    let observations: Observations = {};
+    observations = addObservations(
+      observations,
+      samplesOf(GOLD, 5).map((lab) => ({ color: 'gold' as const, lab })),
+    );
+
+    // Act / Assert
+    expect(paletteOverrides(observations, 3).gold).toBeUndefined();
+  });
+
+  it('金・銀が対でそろっていても学習しない', () => {
+    // Arrange
+    let observations: Observations = {};
+    observations = addObservations(observations, [
+      ...samplesOf(GOLD, 3).map((lab) => ({ color: 'gold' as const, lab })),
+      ...samplesOf(SILVER, 3).map((lab) => ({ color: 'silver' as const, lab })),
+    ]);
+
+    // Act
+    const overrides = paletteOverrides(observations, 3);
+
+    // Assert
+    expect(overrides.gold).toBeUndefined();
+    expect(overrides.silver).toBeUndefined();
+  });
+
+  it('金属色を外しても他の色は学習される', () => {
+    // Arrange
+    let observations: Observations = {};
+    observations = addObservations(observations, [
+      ...samplesOf(GOLD, 5).map((lab) => ({ color: 'gold' as const, lab })),
+      ...samplesOf({ l: 45, a: 40, b: 28 }, 3).map((lab) => ({ color: 'red' as const, lab })),
+    ]);
+
+    // Act
+    const overrides = paletteOverrides(observations, 3);
+
+    // Assert
+    expect(overrides.gold).toBeUndefined();
+    expect(overrides.red).toBeDefined();
+  });
+});
+
+/** 指定した色を並べたプロファイル（各バンドの幅を指定できる）。 */
+function profileOf(
+  layout: readonly { color: BandColor; width: number }[],
+): { profile: ProfileSample[]; bands: { start: number; end: number }[] } {
+  const profile: ProfileSample[] = [];
+  const bands: { start: number; end: number }[] = [];
+  let x = 0;
+  for (const { color, width } of layout) {
+    bands.push({ start: x, end: x + width });
+    for (let i = 0; i < width; i += 1) {
+      profile.push({ x, lab: labOf(color) });
+      x += 1;
+    }
+  }
+  return { profile, bands };
+}
+
+describe('calibrationAssignments', () => {
+  it('バンド 1 本につき 3 点ぶんの観測を返す', () => {
+    // Arrange
+    const { profile, bands } = profileOf([
+      { color: 'yellow', width: 9 },
+      { color: 'violet', width: 9 },
+    ]);
+
+    // Act
+    const assignments = calibrationAssignments(profile, bands, ['yellow', 'violet']);
+
+    // Assert
+    expect(assignments).toHaveLength(6);
+    expect(assignments.map((one) => one.color)).toEqual([
+      'yellow', 'yellow', 'yellow', 'violet', 'violet', 'violet',
+    ]);
+  });
+
+  it('選んだ色をそのまま観測の色にする（推測色ではなく人手の正解）', () => {
+    // Arrange: 見た目は yellow だが、人が violet だと直した場合
+    const { profile, bands } = profileOf([{ color: 'yellow', width: 6 }]);
+
+    // Act
+    const assignments = calibrationAssignments(profile, bands, ['violet']);
+
+    // Assert: 色名は violet、Lab は実写（yellow の見え方）
+    expect(assignments.map((one) => one.color)).toEqual(['violet', 'violet', 'violet']);
+    for (const one of assignments) {
+      expect(one.lab.b).toBeCloseTo(labOf('yellow').b, 6);
+    }
+  });
+
+  it('バンドを 3 区間に割り、区間ごとの中央値を取る', () => {
+    // Arrange: 明度が段階的に変わる 1 本（前 30 / 中 50 / 後 70）
+    const profile: ProfileSample[] = [];
+    [30, 30, 30, 50, 50, 50, 70, 70, 70].forEach((l, x) => {
+      profile.push({ x, lab: { l, a: 0, b: 0 } });
+    });
+
+    // Act
+    const assignments = calibrationAssignments(profile, [{ start: 0, end: 9 }], ['red']);
+
+    // Assert: 3 点が前・中・後を代表する（同じ値の複製ではない）
+    expect(assignments.map((one) => one.lab.l)).toEqual([30, 50, 70]);
+  });
+
+  it('幅が 3 未満のバンドでも 3 点返す', () => {
+    // Arrange
+    const { profile, bands } = profileOf([{ color: 'red', width: 2 }]);
+
+    // Act / Assert
+    expect(calibrationAssignments(profile, bands, ['red'])).toHaveLength(3);
+  });
+
+  it('金・銀も観測としては保存する（採用の可否は paletteOverrides の仕事）', () => {
+    // Arrange
+    const { profile, bands } = profileOf([{ color: 'gold', width: 6 }]);
+
+    // Act
+    const assignments = calibrationAssignments(profile, bands, ['gold']);
+
+    // Assert: 保存はする。ただし paletteOverrides は採用しない
+    expect(assignments).toHaveLength(3);
+    expect(paletteOverrides(addObservations({}, assignments)).gold).toBeUndefined();
+  });
+
+  it('プロファイルに画素が無いバンドは飛ばす', () => {
+    // Arrange: プロファイルの外を指すバンド
+    const { profile } = profileOf([{ color: 'red', width: 6 }]);
+
+    // Act
+    const assignments = calibrationAssignments(
+      profile,
+      [{ start: 0, end: 6 }, { start: 90, end: 96 }],
+      ['red', 'blue'],
+    );
+
+    // Assert: 実在する 1 本ぶんだけ
+    expect(assignments).toHaveLength(3);
+    expect(assignments.every((one) => one.color === 'red')).toBe(true);
+  });
+
+  it('バンド数と色数が食い違うときは何も学習しない', () => {
+    // Arrange
+    const { profile, bands } = profileOf([
+      { color: 'red', width: 6 },
+      { color: 'blue', width: 6 },
+    ]);
+
+    // Act / Assert
+    expect(calibrationAssignments(profile, bands, ['red'])).toEqual([]);
+  });
+
+  it('バンドが無ければ空', () => {
+    expect(calibrationAssignments([], [], [])).toEqual([]);
+  });
+
+  it('1 回の校正で採用の最低件数に届く（校正した色がすぐ効く）', () => {
+    // Arrange
+    const { profile, bands } = profileOf([{ color: 'red', width: 9 }]);
+
+    // Act
+    const observations = addObservations({}, calibrationAssignments(profile, bands, ['red']));
+
+    // Assert
+    expect(paletteOverrides(observations).red).toBeDefined();
   });
 });

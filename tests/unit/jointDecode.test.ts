@@ -1,5 +1,9 @@
 import { describe, expect, it } from 'vitest';
-import { jointReadResistor, type JointRun } from '../../src/core/value/jointDecode.js';
+import {
+  decodedOhmsFor,
+  jointReadResistor,
+  type JointRun,
+} from '../../src/core/value/jointDecode.js';
 import { srgb255ToLab } from '../../src/core/color/colorSpace.js';
 import { BAND_SRGB } from '../../src/core/color/colors.js';
 import type { BandColor, LabColor } from '../../src/types.js';
@@ -322,5 +326,114 @@ describe('間隔の不揃いによる確信度の減点', () => {
     expect(jointReadResistor(stretched)?.confidence).toBeLessThan(
       jointReadResistor(normal)?.confidence ?? 0,
     );
+  });
+});
+
+describe('本体に近いラン（金属容疑）の扱い', () => {
+  /**
+   * 金・銀のバンドは本体との ΔE76 が 4〜11 しかなく、分割で切れるように
+   * しても**色では数字バンドと区別できない**（学習パレットの金属色は
+   * アンカー依存の二峰性で棄却済み — `core/learning.ts`）。
+   *
+   * そこで色ではなく位置づけで縛る。`bodyLab` を渡すと、本体に近いランは
+   * - 数字として解釈しない（倍率・許容差の金・銀としてのみ使う）
+   * - 捨てるときのコストを 0 にする（本数合わせで解釈を歪めない）
+   */
+
+  const BODY: LabColor = { l: 60, a: 10, b: 22 };
+  /** 本体から明度だけ沈んだラン（金バンドや肩の照り返しの見え方）。 */
+  const BODY_LIKE: LabColor = { l: 52, a: 11, b: 20 };
+
+  it('本体に近いランを数字として読まない', () => {
+    // Arrange: brown-black-red = 1kΩ に、本体に近いランが割り込む
+    const runs: JointRun[] = [
+      { lab: labOf('brown'), start: 0, end: 8 },
+      { lab: BODY_LIKE, start: 12, end: 20 },
+      { lab: labOf('black'), start: 24, end: 32 },
+      { lab: labOf('red'), start: 36, end: 44 },
+    ];
+
+    // Act
+    const reading = jointReadResistor(runs, { bodyLab: BODY });
+
+    // Assert: 本体に近いランが数字に化けると 1kΩ にならない
+    expect(reading?.ohms).toBe(1000);
+    const used = reading?.usedRuns.find((run) => run.runIndex === 1);
+    if (used !== undefined) {
+      expect(['multiplier', 'tolerance']).toContain(used.role);
+    }
+  });
+
+  it('本体に近いランはタダで捨てられる（幅が広くても解釈を歪めない）', () => {
+    // Arrange: 幅の広い本体様ランを末尾に足す。ドロップコストが幅比例のままだと
+    // 「捨てると高い → 無理に使う」に倒れる
+    const runs: JointRun[] = [
+      ...runsOf(['brown', 'black', 'red']),
+      { lab: BODY_LIKE, start: 40, end: 70 },
+    ];
+
+    // Act
+    const reading = jointReadResistor(runs, { bodyLab: BODY });
+
+    // Assert
+    expect(reading?.ohms).toBe(1000);
+  });
+
+  it('bodyLab を渡さなければ従来どおり', () => {
+    // Arrange / Act
+    const reading = jointReadResistor(runsOf(['brown', 'black', 'red']), {});
+
+    // Assert
+    expect(reading?.ohms).toBe(1000);
+  });
+
+  it('本体から遠いバンドは制限されない', () => {
+    // Arrange: 全部が通常色。bodyLab を渡しても何も変わらない
+    const runs = runsOf(['yellow', 'violet', 'red', 'gold']);
+
+    // Act
+    const reading = jointReadResistor(runs, { bodyLab: BODY });
+
+    // Assert: 4.7kΩ ±5%
+    expect(reading?.ohms).toBe(4700);
+  });
+});
+
+/**
+ * 期待値の色列（画像上の並び）から抵抗値を求める。
+ *
+ * 焼き込み画像の「カラーコード期待値」の見出しに値を添えるために使う。
+ * 向きの選び方は `roleTextsFor` と同じ実装を共有している。
+ */
+describe('decodedOhmsFor', () => {
+  it('正順でデコードできる色列はその値になる', () => {
+    // Arrange / Act / Assert: 茶黒茶金 = 100Ω ±5%
+    expect(decodedOhmsFor(['brown', 'black', 'brown', 'gold'])).toBe(100);
+  });
+
+  it('正順で成立しないときは逆向きで読む', () => {
+    // Arrange: 46-82kohm は画像上 金-橙-赤-灰。金は数字バンドになれない
+    // Act / Assert: 逆向き 灰-赤-橙-金 = 82kΩ ±5%
+    expect(decodedOhmsFor(['gold', 'orange', 'red', 'grey'])).toBe(82000);
+  });
+
+  it('色が確定していない位置があれば null', () => {
+    expect(decodedOhmsFor(['brown', null, 'brown', 'gold'])).toBeNull();
+  });
+
+  it('バンドが足りなければ null', () => {
+    expect(decodedOhmsFor(['brown', 'black'])).toBeNull();
+  });
+
+  it('どちらの向きでもデコードできなければ null', () => {
+    // Arrange / Act / Assert: 金は倍率と許容差にしかなれない
+    expect(decodedOhmsFor(['gold', 'gold', 'gold', 'gold'])).toBeNull();
+  });
+
+  it('E系列へスナップしない（色列そのものが表す値を返す）', () => {
+    // Arrange: 15-339ohm の 橙-橙-白-黒 = 339Ω。E系列に寄せると 340Ω になり、
+    //          人手で確定したラベルが期待値と食い違って見える
+    // Act / Assert
+    expect(decodedOhmsFor(['orange', 'orange', 'white', 'black', 'brown'])).toBe(339);
   });
 });
