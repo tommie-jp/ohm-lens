@@ -192,7 +192,7 @@ export function drawBandLabels(
       ? BAND_COLOR_JA[band.color]
       : BAND_COLOR_ABBR[band.color];
     drawSidewaysText(context, nameAt, angle, name, BOX_COLOR, fontPx);
-    drawSidewaysText(context, valueAt, angle, roleTexts[index] ?? '?', '#111', fontPx);
+    drawSidewaysText(context, valueAt, angle, roleTexts[index] ?? '?', BOX_COLOR, fontPx);
     context.globalAlpha = 1;
   });
 
@@ -268,7 +268,7 @@ export function drawReadingLabel(
   context.lineWidth = Math.max(3, fontPx * 0.22);
   context.strokeStyle = 'rgb(255 255 255 / 0.92)';
   context.strokeText(text, x, y);
-  context.fillStyle = '#111';
+  context.fillStyle = BOX_COLOR;
   context.fillText(text, x, y);
   context.restore();
 }

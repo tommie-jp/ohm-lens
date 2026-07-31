@@ -257,6 +257,36 @@ body.live .stage::after {
   opacity: 0.85;
 }
 
+/* スクリーンショット: 右上のアイコンボタン（映像を隠さないよう記号だけ） */
+.screenshot-button {
+  position: absolute;
+  z-index: 2;
+  top: calc(0.75rem + env(safe-area-inset-top));
+  right: 0.75rem;
+  display: grid;
+  place-items: center;
+  width: 44px;
+  height: 44px;
+  padding: 0;
+  border: 1px solid rgb(255 255 255 / 0.35);
+  border-radius: 50%;
+  background: rgb(0 0 0 / 0.45);
+  color: #fff;
+}
+
+.screenshot-button svg {
+  width: 24px;
+  height: 24px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.6;
+  stroke-linejoin: round;
+}
+
+.screenshot-button:disabled {
+  opacity: 0.5;
+}
+
 /* ボタン類: 半透明チップにして映像の上でも読めるようにする */
 body.live .camera-controls,
 body.live .stage-bar {

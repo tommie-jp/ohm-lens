@@ -46,6 +46,8 @@ import { coverVisibleRect, pointerToCanvas, type Rect as ViewRect } from './view
 import { guideBox } from './guide.js';
 import { createCameraMenu } from './cameraMenu.js';
 import { pinchZoom, touchDistance } from './pinchZoom.js';
+import { composeScreenshot, screenshotFileName } from './screenshot.js';
+import { resolveSaveDirectory, saveBlob } from './saveTarget.js';
 
 /**
  * Phase 0 の目視確認ツール。
@@ -68,6 +70,7 @@ const elements = {
   liveReadingValue: requireElement<HTMLOutputElement>('#live-reading-value'),
   liveReadingNote: requireElement<HTMLSpanElement>('#live-reading-note'),
   liveAutoButton: requireElement<HTMLButtonElement>('#live-auto-button'),
+  screenshotButton: requireElement<HTMLButtonElement>('#screenshot-button'),
   emptyError: requireElement<HTMLParagraphElement>('#empty-error'),
   cameraControls: requireElement<HTMLDivElement>('#camera-controls'),
   fileInput: requireElement<HTMLInputElement>('#file-input'),
@@ -117,14 +120,33 @@ const statusParts: {
   input: string;
   detection: string;
   performance: string;
-} = { input: '', detection: '', performance: '' };
+  /** 保存の結果など、しばらくしたら消える一言。 */
+  notice: string;
+} = { input: '', detection: '', performance: '', notice: '' };
 
 function renderStatus(): void {
-  const parts = [statusParts.input, statusParts.detection, statusParts.performance].filter(
-    (part) => part !== '',
-  );
+  const parts = [
+    statusParts.notice,
+    statusParts.input,
+    statusParts.detection,
+    statusParts.performance,
+  ].filter((part) => part !== '');
   elements.statusLine.textContent =
     parts.length === 0 ? '画像またはカメラを選んでください。' : parts.join(' ・ ');
+}
+
+/** 一時的な知らせ。数秒で消して、元のステータスに戻す。 */
+const NOTICE_MS = 5000;
+let noticeTimer = 0;
+
+function showNotice(text: string): void {
+  statusParts.notice = text;
+  renderStatus();
+  window.clearTimeout(noticeTimer);
+  noticeTimer = window.setTimeout(() => {
+    statusParts.notice = '';
+    renderStatus();
+  }, NOTICE_MS);
 }
 
 /** 選択肢に出すバンド色。 */
@@ -195,8 +217,8 @@ let ultraWideId: string | null = null;
 const MAX_LEARN_COST = 25;
 
 /** ライブのオーバーレイ文字の大きさ [画面 px]。 */
-const LIVE_LABEL_SCREEN_PX = 18;
-const LIVE_READING_SCREEN_PX = 28;
+const LIVE_LABEL_SCREEN_PX = 24;
+const LIVE_READING_SCREEN_PX = 38;
 
 /**
  * 現在有効なパレット。サーバの学習結果に、この場で学習した上書きを重ねる。
@@ -236,6 +258,7 @@ function applyMode(next: Mode): void {
   elements.emptyState.hidden = next !== 'idle';
   elements.liveWrap.hidden = next !== 'live';
   elements.liveReading.hidden = next !== 'live';
+  elements.screenshotButton.hidden = next !== 'live';
   elements.sourceCanvas.hidden = next !== 'still';
   elements.captureButton.hidden = next !== 'live';
   elements.liveAutoButton.hidden = next !== 'live';
@@ -864,6 +887,55 @@ function setPreviewZoom(zoom: number): void {
   camera?.setDigitalZoom(value);
   elements.liveVideo.style.transform = value === 1 ? '' : `scale(${String(value)})`;
 }
+
+function canvasToJpeg(canvas: HTMLCanvasElement): Promise<Blob> {
+  return new Promise((resolve, reject) => {
+    canvas.toBlob(
+      (blob) => {
+        if (blob === null) reject(new Error('画像を書き出せませんでした'));
+        else resolve(blob);
+      },
+      'image/jpeg',
+      0.92,
+    );
+  });
+}
+
+/**
+ * 画面に見えているまま（映像 + 枠・バンド・値）を 1 枚に保存する。
+ *
+ * 保存先のフォルダは最初の 1 回だけ選んでもらい、以後は覚えたものを使う。
+ * フォルダを選ぶダイアログはユーザー操作の文脈からしか開けないので、
+ * 画像を作るより先に保存先を決める。
+ */
+async function takeScreenshot(): Promise<void> {
+  if (mode !== 'live' || source === null) return;
+
+  const button = elements.screenshotButton;
+  button.disabled = true;
+  try {
+    const directory = await resolveSaveDirectory();
+    const canvas = composeScreenshot({
+      video: elements.liveVideo,
+      overlay: elements.overlayCanvas,
+      frame: { width: source.width, height: source.height },
+      visible: visibleFrameRect(source),
+      zoom: previewZoom,
+    });
+    const fileName = screenshotFileName(new Date());
+    const where = await saveBlob(await canvasToJpeg(canvas), fileName, directory);
+    showNotice(where === 'directory' ? `${fileName} を保存` : `${fileName} をダウンロード`);
+  } catch (error) {
+    console.error(error);
+    showNotice(`保存できませんでした: ${String(error)}`);
+  } finally {
+    button.disabled = false;
+  }
+}
+
+elements.screenshotButton.addEventListener('click', () => {
+  void takeScreenshot();
+});
 
 /**
  * 2 本指のピンチで映像だけを拡大する。
