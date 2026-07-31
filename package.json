@@ -1,6 +1,6 @@
 {
   "name": "ohm-lens",
-  "version": "0.0.0",
+  "version": "0.1.0",
   "private": true,
   "type": "module",
   "description": "Webカメラに映した抵抗器の抵抗値をリアルタイムでオーバーレイ表示する Web アプリ",
@@ -19,7 +19,8 @@
   },
   "dependencies": {
     "culori": "^4.0.2",
-    "heic-to": "^1.5.2"
+    "heic-to": "^1.5.2",
+    "html-to-image": "^1.11.13"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",

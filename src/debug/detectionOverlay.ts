@@ -30,6 +30,21 @@ const MAX_LABEL_PX = 42;
 /** 確信度がこれ未満のラベルは薄く描く（誤分類を見分けるため）。 */
 const LOW_CONFIDENCE = 0.35;
 
+/**
+ * 色見本の一辺（文字サイズに対する割合）。
+ *
+ * 丸ではなく四角にしてある。同じ差し渡しでも面積が広く、金/黄・灰/銀の
+ * ように明度だけが違う組を見分けやすい。
+ */
+const SWATCH_SIZE_RATIO = 0.8;
+
+/**
+ * 色見本の中心を色名の書き出し位置からどれだけ手前へ置くか
+ * （文字サイズに対する割合）。文字は左揃えで x=0 から右へ伸びるので、
+ * 一辺の半分ぶんの余白が残るように取る。
+ */
+const SWATCH_OFFSET_RATIO = 0.62;
+
 export interface OverlayOptions {
   /** ROI を切り出したときと同じ設定。座標を正しく逆変換するために必要。 */
   readonly rectify: RectifyOptions;
@@ -175,12 +190,13 @@ export function drawBandLabels(
       side,
     );
 
-    // 色玉（金/黄、灰/銀の取り違えを目で確かめられるように）。色名の手前に置く
+    // 色見本（金/黄、灰/銀の取り違えを目で確かめられるように）。色名の手前に置く
     context.save();
     context.translate(nameAt.x, nameAt.y);
     context.rotate(angle);
+    const swatch = fontPx * SWATCH_SIZE_RATIO;
     context.beginPath();
-    context.arc(-fontPx * 0.55, 0, fontPx * 0.32, 0, Math.PI * 2);
+    context.rect(-fontPx * SWATCH_OFFSET_RATIO - swatch / 2, -swatch / 2, swatch, swatch);
     context.fillStyle = bandColorCss(band.color);
     context.fill();
     context.strokeStyle = 'rgb(0 0 0 / 0.5)';

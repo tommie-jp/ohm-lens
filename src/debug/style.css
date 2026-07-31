@@ -268,6 +268,86 @@ body.live .stage::after {
 }
 
 /*
+ * スクリーンショットに焼いている間だけ、背景を透ける。
+ *
+ * 作り物（ボタン・数値・グラフ）は映像の**上に**重ねるので、背景色まで
+ * 焼き込むと下の実写が真っ黒に潰れる。焼くのは一瞬で、映像はそのまま
+ * 見えているので画面の見た目はほとんど変わらない。
+ */
+body.capturing .stage,
+body.capturing .stage-media {
+  background: transparent;
+}
+
+/*
+ * バージョン: 右上の最上段。スクリーンショットに写るよう、ヘッダーではなく
+ * 映像の上に置く（ライブは全画面でヘッダーが隠れるため）。
+ */
+.app-version {
+  position: absolute;
+  z-index: 1;
+  top: calc(0.75rem + env(safe-area-inset-top));
+  right: 0.75rem;
+  margin: 0;
+  color: #fff;
+  font-size: 0.7rem;
+  opacity: 0.85;
+  pointer-events: none;
+  text-shadow: 0 1px 3px rgb(0 0 0 / 0.8);
+}
+
+/*
+ * スレッド占有率: 右上、バージョンの下（撮影ボタンは右下へ退けてある）。
+ * 読み値は左上なので、右寄せにすれば重ならない。
+ * 操作の邪魔をしないよう素通しにする。
+ */
+.thread-load {
+  position: absolute;
+  z-index: 1;
+  top: calc(0.75rem + 1.1rem + env(safe-area-inset-top));
+  right: 0.75rem;
+  color: #fff;
+  pointer-events: none;
+  text-shadow: 0 1px 3px rgb(0 0 0 / 0.8);
+}
+
+#thread-load-canvas {
+  display: block;
+  width: 120px;
+  height: 32px;
+  margin-left: auto;
+  border-radius: 4px;
+  background: rgb(0 0 0 / 0.28);
+}
+
+.thread-load-legend {
+  display: flex;
+  gap: 0.6rem;
+  justify-content: flex-end;
+  margin: 0.2rem 0 0;
+  font-size: 0.7rem;
+  font-variant-numeric: tabular-nums;
+}
+
+/* 系列の色は canvas 側（threadLoadView.ts）と揃える */
+.thread-load-key::before {
+  display: inline-block;
+  width: 0.55rem;
+  height: 0.55rem;
+  margin-right: 0.25rem;
+  border-radius: 2px;
+  content: '';
+}
+
+.thread-load-key.main::before {
+  background: #ffb74d;
+}
+
+.thread-load-key.worker::before {
+  background: #4dd0e1;
+}
+
+/*
  * シャッターの演出。カメラアプリと同じく画面を一瞬白く飛ばす。
  * 操作の邪魔をしないよう素通しにする。
  */
@@ -320,11 +400,12 @@ body.live .stage::after {
 }
 
 /* スクリーンショット: 右上のアイコンボタン（映像を隠さないよう記号だけ） */
+/* 撮影ボタンは右下。上部はスレッド占有率のグラフに譲る */
 .screenshot-button {
   position: absolute;
   z-index: 2;
-  top: calc(0.75rem + env(safe-area-inset-top));
   right: 0.75rem;
+  bottom: 0.75rem;
   display: grid;
   place-items: center;
   width: 44px;
@@ -467,6 +548,14 @@ body.live #live-auto-button[aria-pressed='true'] {
   color: var(--muted);
   font-size: 0.85rem;
   min-height: 1.2em;
+}
+
+/* 同じカードの中の 2 つ目の学習経路（色校正）を仕切る */
+.learn-sub {
+  margin: 1rem 0 0.25rem;
+  padding-top: 0.75rem;
+  border-top: 1px solid var(--border);
+  font-size: 0.95rem;
 }
 
 .learn-row {

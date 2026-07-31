@@ -14,8 +14,10 @@ import { createDefaultClient } from './analysis/analysisClient.js';
 import { formatLabels, loadLabels, saveLabels, type LabelMap } from './labelStore.js';
 import {
   addObservations,
+  calibrationAssignments,
   matchRunsToValue,
   paletteOverrides,
+  UNLEARNABLE_COLORS,
   type Observations,
 } from '../core/learning.js';
 import { parseOhms } from '../core/value/parseOhms.js';
@@ -52,7 +54,10 @@ import { coverVisibleRect, pointerToCanvas, type Rect as ViewRect } from './view
 import { guideBox } from './guide.js';
 import { createCameraMenu } from './cameraMenu.js';
 import { pinchZoom, touchDistance } from './pinchZoom.js';
+import { createLoad, currentLoad, recordWork, sampleLoad, type LoadState } from './threadLoad.js';
+import { drawThreadLoad, formatLoad } from './threadLoadView.js';
 import { composeScreenshot, jpegBlob, screenshotFileName } from './screenshot.js';
+import { captureChrome, preloadChromeShot, type ChromeShot } from './chromeShot.js';
 import { saveImage, type SaveResult } from './saveTarget.js';
 import { playShutterSound } from './shutter.js';
 
@@ -70,6 +75,7 @@ interface Rect {
 }
 
 const elements = {
+  stage: requireElement<HTMLElement>('#stage'),
   stageMedia: requireElement<HTMLDivElement>('#stage-media'),
   liveWrap: requireElement<HTMLDivElement>('#live-wrap'),
   liveVideo: requireElement<HTMLVideoElement>('#live-video'),
@@ -87,6 +93,7 @@ const elements = {
   sampleButton: requireElement<HTMLButtonElement>('#sample-button'),
   cameraButton: requireElement<HTMLButtonElement>('#camera-button'),
   captureButton: requireElement<HTMLButtonElement>('#capture-button'),
+  calibrateButton: requireElement<HTMLButtonElement>('#calibrate-button'),
   resetButton: requireElement<HTMLButtonElement>('#reset-button'),
   cameraMenu: requireElement<HTMLDivElement>('#camera-menu'),
   emptyState: requireElement<HTMLDivElement>('#empty-state'),
@@ -112,10 +119,16 @@ const elements = {
   learnValue: requireElement<HTMLInputElement>('#learn-value'),
   learnTolerance: requireElement<HTMLSelectElement>('#learn-tolerance'),
   learnButton: requireElement<HTMLButtonElement>('#learn-button'),
+  learnColorsButton: requireElement<HTMLButtonElement>('#learn-colors-button'),
   learnStatus: requireElement<HTMLParagraphElement>('#learn-status'),
   learnCounts: requireElement<HTMLParagraphElement>('#learn-counts'),
   learnExport: requireElement<HTMLButtonElement>('#learn-export'),
   learnClear: requireElement<HTMLButtonElement>('#learn-clear'),
+  appVersion: requireElement<HTMLParagraphElement>('#app-version'),
+  threadLoad: requireElement<HTMLDivElement>('#thread-load'),
+  threadLoadCanvas: requireElement<HTMLCanvasElement>('#thread-load-canvas'),
+  threadLoadMain: requireElement<HTMLOutputElement>('#thread-load-main'),
+  threadLoadWorker: requireElement<HTMLOutputElement>('#thread-load-worker'),
   stickyBar: requireElement<HTMLDivElement>('#sticky-bar'),
   stickyReading: requireElement<HTMLOutputElement>('#sticky-reading'),
   stickyLearn: requireElement<HTMLButtonElement>('#sticky-learn'),
@@ -285,6 +298,7 @@ function applyMode(next: Mode): void {
   elements.screenshotButton.hidden = next !== 'live';
   elements.sourceCanvas.hidden = next !== 'still';
   elements.captureButton.hidden = next !== 'live';
+  elements.calibrateButton.hidden = next !== 'live';
   elements.liveAutoButton.hidden = next !== 'live';
   if (next !== 'live') elements.cameraMenu.hidden = true;
   elements.resetButton.hidden = next !== 'still';
@@ -346,6 +360,62 @@ function invalidateAnalyses(): void {
 }
 
 /**
+ * スレッドごとの占有率。ライブ中だけ映像へ重ねて出す。
+ *
+ * 本当の CPU 使用率はブラウザから取れないので、**解析の処理にそのスレッドを
+ * 使った時間の割合**で代用する。メイン側は画素の取り出しと結果の描画、
+ * ワーカー側は応答に載っている `durationMs`（解析そのものの実測）。
+ * 両方とも同じ「実測 ÷ 経過時間」なので、並べて比べられる。
+ */
+const MAIN_LOAD_COLOR = '#ffb74d';
+const WORKER_LOAD_COLOR = '#4dd0e1';
+/** 履歴を刻む間隔 [ms]。細かすぎても読めないので 4fps 程度にする。 */
+const LOAD_SAMPLE_MS = 250;
+
+let mainLoad: LoadState = createLoad();
+let workerLoad: LoadState = createLoad();
+let loadTimer = 0;
+
+/** メインスレッドを使った区間を測って積む。返り値は `fn` のもの。 */
+function measureMain<T>(fn: () => T): T {
+  const started = performance.now();
+  try {
+    return fn();
+  } finally {
+    const now = performance.now();
+    mainLoad = recordWork(mainLoad, now, now - started);
+  }
+}
+
+function renderThreadLoad(): void {
+  const now = performance.now();
+  mainLoad = sampleLoad(mainLoad, now);
+  workerLoad = sampleLoad(workerLoad, now);
+
+  drawThreadLoad(elements.threadLoadCanvas, [
+    { history: workerLoad.history, color: WORKER_LOAD_COLOR, fill: 'rgb(77 208 225 / 0.25)' },
+    { history: mainLoad.history, color: MAIN_LOAD_COLOR, fill: 'rgb(255 183 77 / 0.25)' },
+  ]);
+  elements.threadLoadMain.textContent = formatLoad(currentLoad(mainLoad, now));
+  elements.threadLoadWorker.textContent = formatLoad(currentLoad(workerLoad, now));
+}
+
+function startThreadLoadMeter(): void {
+  mainLoad = createLoad();
+  workerLoad = createLoad();
+  elements.threadLoad.hidden = false;
+  window.clearInterval(loadTimer);
+  loadTimer = window.setInterval(renderThreadLoad, LOAD_SAMPLE_MS);
+  renderThreadLoad();
+}
+
+function stopThreadLoadMeter(): void {
+  window.clearInterval(loadTimer);
+  loadTimer = 0;
+  elements.threadLoad.hidden = true;
+}
+
+/**
  * 解析の依頼を組む。**canvas から画素を取り出すのはここだけ**で、
  * 以降の解析は DOM に触らない（`analysis/runAnalysis.ts`）。
  *
@@ -388,11 +458,15 @@ async function requestAnalysis(
   analysisMode: AnalysisMode,
   area?: Rect,
 ): Promise<AnalysisResponse | null> {
-  const request = buildRequest(frame, analysisMode, area);
+  // 画素の取り出し（`getImageData`）はメインスレッドに残っている処理
+  const request = measureMain(() => buildRequest(frame, analysisMode, area));
   if (request === null) return null;
 
   const response = await analysisClient.analyze(request);
   if (response === null || response.frameId !== lastFrameId) return null;
+
+  // ワーカー側は解析そのものの実測を応答から受け取る
+  workerLoad = recordWork(workerLoad, performance.now(), response.durationMs);
   return response;
 }
 
@@ -481,16 +555,19 @@ async function analyzeLiveFrame(frame: HTMLCanvasElement): Promise<void> {
   // 待っている間にカメラを開き直していたら、この結果はもう別の映像のもの
   if (response === null || mode !== 'live') return;
 
-  statusParts.detection = detectionLabel(response.box);
-  renderStatus();
-  if (response.analysis !== null) {
-    renderAnalysisView(response.roi, response.analysis);
-    settleReading(response.analysis);
-  }
+  // 応答を受けてからの描画もメインスレッドの仕事
+  measureMain(() => {
+    statusParts.detection = detectionLabel(response.box);
+    renderStatus();
+    if (response.analysis !== null) {
+      renderAnalysisView(response.roi, response.analysis);
+      settleReading(response.analysis);
+    }
 
-  const smoothed = pushBox(smoother, response.box);
-  smoother = smoothed.state;
-  drawLiveOverlay(frame, smoothed.box, false);
+    const smoothed = pushBox(smoother, response.box);
+    smoother = smoothed.state;
+    drawLiveOverlay(frame, smoothed.box, false);
+  });
 }
 
 /**
@@ -538,11 +615,14 @@ async function analyzeGuideFrame(frame: HTMLCanvasElement): Promise<void> {
   const response = await requestAnalysis(frame, { kind: 'box', box });
   // 待っている間にカメラを開き直していたら、この結果はもう別の映像のもの
   if (mode !== 'live') return;
-  if (response !== null && response.analysis !== null) {
-    renderAnalysisView(response.roi, response.analysis);
-    settleReading(response.analysis);
-  }
-  drawLiveOverlay(frame, box, true);
+  // 応答を受けてからの描画もメインスレッドの仕事
+  measureMain(() => {
+    if (response !== null && response.analysis !== null) {
+      renderAnalysisView(response.roi, response.analysis);
+      settleReading(response.analysis);
+    }
+    drawLiveOverlay(frame, box, true);
+  });
 }
 
 /**
@@ -825,6 +905,7 @@ function updateStickyBar(): void {
 function stopCamera(): void {
   camera?.stop();
   camera = null;
+  stopThreadLoadMeter();
   // 飛んでいる解析の応答を、この後の画面に流し込まない
   invalidateAnalyses();
   cameraControlsHandle?.clear();
@@ -889,6 +970,9 @@ async function beginCamera(deviceId?: string, options: { macro?: boolean } = {})
   elements.emptyError.textContent = '';
   smoother = createSmoother();
   resetReading();
+  startThreadLoadMeter();
+  // 撮影で使うラスタライザを先に取っておく（押し込みから読むと間に合わない）
+  preloadChromeShot();
   applyMode('live');
   void requestWakeLock();
   const { status } = camera;
@@ -1012,6 +1096,8 @@ function takeScreenshot(): void {
       frame: { width: source.width, height: source.height },
       visible: visibleFrameRect(source),
       zoom: previewZoom,
+      // 押し込みから間に合ったぶんだけ重ねる（待つと保存の権利が切れる）
+      chrome: chromeShot?.canvas ?? null,
     });
     blob = jpegBlob(canvas);
   } catch (error) {
@@ -1049,6 +1135,21 @@ function takeScreenshot(): void {
 const SHUTTER_DEBOUNCE_MS = 600;
 let lastShutterAt = Number.NEGATIVE_INFINITY;
 
+/**
+ * 画面の作り物を焼いたもの。**押し込みの時点で焼き始める。**
+ *
+ * ラスタライズは非同期だが、保存はユーザー操作の文脈からしか呼べないので
+ * 撮影の瞬間には待てない。指を離すまでの間に焼き上がったものだけを使う
+ * （`chromeShot.ts` を参照）。
+ */
+let chromeShot: ChromeShot | null = null;
+
+function prepareChromeShot(): void {
+  if (mode !== 'live') return;
+  // ボタン行まで含めたいので、映像レイヤではなくライブ表示の全体を焼く
+  chromeShot = captureChrome(elements.stage);
+}
+
 function requestScreenshot(): void {
   const now = performance.now();
   if (now - lastShutterAt < SHUTTER_DEBOUNCE_MS) return;
@@ -1056,9 +1157,20 @@ function requestScreenshot(): void {
   takeScreenshot();
 }
 
+// 押し込みで焼き始め、離すときに撮る（間に合ったぶんだけ写る）
+elements.screenshotButton.addEventListener('pointerdown', (event) => {
+  if (event.button !== 0) return;
+  prepareChromeShot();
+});
+
 elements.screenshotButton.addEventListener('pointerup', (event) => {
   if (event.button !== 0) return; // 右クリック・中クリックでは撮らない
   requestScreenshot();
+});
+
+// キーボード操作は pointerdown を伴わない。押された時点から焼き始める
+elements.screenshotButton.addEventListener('keydown', (event) => {
+  if (event.key === 'Enter' || event.key === ' ') prepareChromeShot();
 });
 
 elements.screenshotButton.addEventListener('click', requestScreenshot);
@@ -1258,9 +1370,14 @@ elements.liveAutoButton.addEventListener('click', () => {
   renderStatus();
 });
 
-elements.captureButton.addEventListener('click', () => {
-  if (camera === null || source === null) return;
-  // 現在のフレームを複製してから止める。止めた後も解析・ラベル付けを続けられる。
+/**
+ * 映っているフレームで止める。止めた後も解析・ラベル付け・色校正を続けられる。
+ * 「スナップショット」と「色校正」の両方がここを通る。
+ */
+function captureStill(): boolean {
+  if (camera === null || source === null) return false;
+
+  // 現在のフレームを複製してから止める
   const frozen = document.createElement('canvas');
   frozen.width = source.width;
   frozen.height = source.height;
@@ -1270,7 +1387,66 @@ elements.captureButton.addEventListener('click', () => {
   statusParts.input = 'カメラ静止画';
   renderStatus();
   setSource(frozen);
+  return true;
+}
+
+elements.captureButton.addEventListener('click', () => {
+  captureStill();
 });
+
+/**
+ * 色校正。映像を止めて、バンド表（色を選び直すプルダウン）まで案内する。
+ * 選んだ色は「選んだ色で学習」で基準色に反映する。
+ */
+elements.calibrateButton.addEventListener('click', () => {
+  if (!captureStill()) return;
+  elements.learnStatus.textContent =
+    'バンドごとに正しい色を選んで「選んだ色で学習」を押してください';
+  elements.bandsTable.scrollIntoView({ behavior: 'smooth', block: 'start' });
+});
+
+/**
+ * 人が選んだ色をそのまま基準色の学習に回す。
+ *
+ * 値からの逆算（`learnFromCurrent`）と違い、値が分からない抵抗でも較正できる。
+ * 1 本につき 3 点取るので、1 回で採用の最低件数に届く。
+ */
+function learnFromCorrections(): void {
+  if (lastResult === null || lastResult.bands.length === 0) {
+    elements.learnStatus.textContent = '先に抵抗を検出してください';
+    return;
+  }
+  if (correctedColors.length !== lastResult.bands.length) {
+    elements.learnStatus.textContent = 'バンドの色を選び直してから押してください';
+    return;
+  }
+
+  const assignments = calibrationAssignments(
+    lastResult.profile,
+    lastResult.bands,
+    correctedColors,
+  );
+  if (assignments.length === 0) {
+    elements.learnStatus.textContent = '学習できるバンドがありませんでした';
+    return;
+  }
+
+  observations = addObservations(observations, assignments);
+  invalidatePalette();
+  saveObservations(observations);
+  renderLearnCounts();
+
+  // 金・銀は保存はするが基準色には採用しない。黙って無視すると
+  // 「学習したのに変わらない」と見えるので理由を添える
+  const metallic = [...new Set(correctedColors.filter((color) => UNLEARNABLE_COLORS.includes(color)))];
+  const note = metallic.length === 0 ? '' : `（${metallic.join('・')}は本体色との相対で判定するため学習対象外）`;
+  elements.learnStatus.textContent =
+    `選んだ色で学習しました: ${correctedColors.join('-')}${note}`;
+
+  void analyzeSelection(); // 学習直後のパレットで読み直す
+}
+
+elements.learnColorsButton.addEventListener('click', learnFromCorrections);
 
 
 
@@ -1372,6 +1548,9 @@ document.addEventListener('visibilitychange', () => {
   void requestWakeLock();
   if (camera.video.paused) void camera.video.play().catch(() => undefined);
 });
+
+// バージョンは package.json 由来（vite.config.ts の define で埋まる）
+elements.appVersion.textContent = `ohm-lens v${__APP_VERSION__}`;
 
 void loadPaletteFromServer();
 renderLabelJson();

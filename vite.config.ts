@@ -31,9 +31,20 @@ function servePalette(): Plugin {
 
 // Phase 0 のデバッグページは src/debug をルートにする。
 // Phase 1 で本番 UI を作る際にルート構成を見直す。
+/**
+ * 画面に出すバージョン。package.json を唯一の出どころにする
+ * （表示用に別途書くと、版を上げたときに片方だけ古くなる）。
+ */
+const appVersion = (
+  JSON.parse(readFileSync(join(import.meta.dirname, 'package.json'), 'utf-8')) as {
+    version: string;
+  }
+).version;
+
 export default defineConfig({
   root: 'src/debug',
   plugins: [servePalette()],
+  define: { __APP_VERSION__: JSON.stringify(appVersion) },
   // 相対パスで出力する。GitHub Pages のプロジェクトページ（/ohm-lens/ 配下）と
   // カスタムドメイン（直下）のどちらでも、同じ成果物がそのまま動くようにするため。
   // 絶対パスにすると配信先を変えるたびにビルド設定を触ることになる。

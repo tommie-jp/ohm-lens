@@ -22,7 +22,7 @@
 
     <main class="layout">
       <!-- 左: 映像と入力操作 -->
-      <section class="stage" aria-label="映像">
+      <section class="stage" id="stage" aria-label="映像">
         <div class="stage-media" id="stage-media">
           <div class="live-wrap" id="live-wrap" hidden>
             <video id="live-video" playsinline muted disablepictureinpicture></video>
@@ -48,6 +48,18 @@
               <circle cx="12" cy="13" r="3.6" />
             </svg>
           </button>
+          <p class="app-version" id="app-version"></p>
+          <div class="thread-load" id="thread-load" hidden>
+            <canvas id="thread-load-canvas" aria-hidden="true"></canvas>
+            <p class="thread-load-legend">
+              <span class="thread-load-key main"
+                >メイン <output id="thread-load-main">0%</output></span
+              >
+              <span class="thread-load-key worker"
+                >ワーカー <output id="thread-load-worker">0%</output></span
+              >
+            </p>
+          </div>
           <canvas id="source-canvas" hidden></canvas>
           <div class="empty-state" id="empty-state">
             <p class="empty-title">抵抗を映すか、画像を選んでください</p>
@@ -73,6 +85,7 @@
               自動検出
             </button>
             <button type="button" id="capture-button" hidden>スナップショット</button>
+            <button type="button" id="calibrate-button" hidden>色校正</button>
             <button type="button" id="reset-button" hidden class="quiet">入力を変える</button>
             <div id="camera-menu" class="camera-menu" hidden></div>
           </div>
@@ -116,6 +129,16 @@
               <option value="none">許容差なし</option>
             </select>
             <button type="button" id="learn-button" class="primary">学習</button>
+          </div>
+          <h2 class="learn-sub">選んだ色で学習（色校正）</h2>
+          <p class="hint">
+            値が分からない抵抗でも、上の表で<strong>バンドごとに正しい色</strong>を
+            選べば較正できます。1 本につき 3 点（前・中・後）を取るので、
+            1 回で基準色に反映されます。
+            <span class="muted">金・銀は本体色との相対で判定するため学習対象外です。</span>
+          </p>
+          <div class="learn-row">
+            <button type="button" id="learn-colors-button">選んだ色で学習</button>
           </div>
           <p class="status" id="learn-status"></p>
           <p class="status muted" id="learn-counts"></p>

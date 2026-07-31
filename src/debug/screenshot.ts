@@ -105,9 +105,18 @@ export interface ComposeOptions {
   /** 解析フレームのうち画面に出ている範囲。 */
   readonly visible: Rect;
   readonly zoom: number;
+  /**
+   * 画面の作り物（バージョン・占有率グラフ・読み値・ボタン）を焼いた画像。
+   *
+   * 用意できていなければ省く。ラスタライズは非同期なので押し込みの時点で
+   * 走らせておき、間に合わなければ**映像とオーバーレイだけで保存する**
+   * （待つと保存の権利が切れる。`saveTarget.ts` の注意書きを参照）。
+   * 画面いっぱいに引き伸ばして重ねる — 元が表示そのものなので比率は合う。
+   */
+  readonly chrome?: HTMLCanvasElement | null;
 }
 
-/** 映像とオーバーレイを 1 枚に合成した canvas。 */
+/** 映像・オーバーレイ・画面の作り物を 1 枚に合成した canvas。 */
 export function composeScreenshot(options: ComposeOptions): HTMLCanvasElement {
   const source = visibleSourceRect(
     { width: options.video.videoWidth, height: options.video.videoHeight },
@@ -146,5 +155,11 @@ export function composeScreenshot(options: ComposeOptions): HTMLCanvasElement {
     size.width,
     size.height,
   );
+
+  // 画面の作り物は表示そのものなので、そのまま画面いっぱいに伸ばす
+  const chrome = options.chrome ?? null;
+  if (chrome !== null && chrome.width > 0 && chrome.height > 0) {
+    context.drawImage(chrome, 0, 0, size.width, size.height);
+  }
   return canvas;
 }
