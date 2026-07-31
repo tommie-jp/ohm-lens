@@ -1,10 +1,16 @@
-import { analyzeRoi, type AnalysisResult } from '../core/pipeline.js';
-import { locateResistor, type OrientedBox } from '../core/locate.js';
-import { refineBoxExtent } from '../core/refine.js';
-import { analyzeOptions, refineOptions, ROI_OPTIONS } from '../core/settings.js';
-import { rectify } from '../core/rectify.js';
-import type { RoiImage } from '../core/bands/profile.js';
+import type { OrientedBox } from '../core/locate.js';
+import { ROI_OPTIONS } from '../core/settings.js';
 import { withOverrides, DEFAULT_PALETTE, type Palette } from '../core/color/palette.js';
+import {
+  toRoiImage,
+  toTransferImage,
+  type AnalysisMode,
+  type AnalysisRequest,
+  type AnalysisResponse,
+  type AnalysisSummary,
+  type TransferImage,
+} from './analysis/protocol.js';
+import { createDefaultClient } from './analysis/analysisClient.js';
 import { formatLabels, loadLabels, saveLabels, type LabelMap } from './labelStore.js';
 import {
   addObservations,
@@ -24,7 +30,7 @@ import {
 import type { Band, BandColor, LabColor } from '../types.js';
 import { createSampleCanvas } from './sample.js';
 import { drawProfile } from './profileView.js';
-import { context2d } from './canvas.js';
+import { context2d, putPixels } from './canvas.js';
 import { decodeImageFile } from './decodeImage.js';
 import { drawDetectionOverlay, drawGuideCenterline, drawReadingLabel } from './detectionOverlay.js';
 import { SUPPORTED_ACCEPT } from '../core/imageFormat.js';
@@ -161,12 +167,11 @@ const BAND_COLORS: readonly BandColor[] = [
 let correctedColors: BandColor[] = [];
 
 let source: HTMLCanvasElement | null = null;
-let detectedBox: OrientedBox | null = null;
 let palette: Palette | null = null;
 let savedLabels: LabelMap = loadLabels();
 let camera: CameraSession | null = null;
 let observations: Observations = loadObservations();
-let lastResult: AnalysisResult | null = null;
+let lastResult: AnalysisSummary | null = null;
 
 /**
  * 画面のモード。
@@ -224,12 +229,28 @@ const LIVE_READING_SCREEN_PX = 38;
 
 /**
  * 現在有効なパレット。サーバの学習結果に、この場で学習した上書きを重ねる。
+ *
+ * 結果は覚えておく。`paletteOverrides` は色ごとに最大 100 件の観測を
+ * ソートして中央値を取るので 1 回 80µs ほどかかり、ライブの毎フレーム
+ * （解析依頼を組むたび）に呼ぶと解析をワーカースレッドへ追い出した意味が薄れる。
+ * 元になる `observations` と `palette` はボタン操作でしか変わらないので、
+ * 変えた側が {@link invalidatePalette} を呼ぶ。
  */
+let cachedPalette: { readonly value: Palette | null } | null = null;
+
 function activePalette(): Palette | null {
+  if (cachedPalette !== null) return cachedPalette.value;
+
   const learned = paletteOverrides(observations);
   const base = palette ?? DEFAULT_PALETTE;
-  if (Object.keys(learned).length === 0) return palette;
-  return withOverrides(base, learned);
+  const value = Object.keys(learned).length === 0 ? palette : withOverrides(base, learned);
+  cachedPalette = { value };
+  return value;
+}
+
+/** 学習内容や共有パレットを変えたら呼ぶ。 */
+function invalidatePalette(): void {
+  cachedPalette = null;
 }
 
 /** 学習した色ごとの件数を表示する。 */
@@ -286,7 +307,7 @@ function setSource(canvas: HTMLCanvasElement): void {
     width: canvas.width,
     height: Math.max(1, Math.round(canvas.height * 0.4)),
   };
-  analyzeSelection();
+  void analyzeSelection();
 }
 
 function redrawSource(): void {
@@ -303,89 +324,140 @@ function redrawSource(): void {
   context.strokeRect(selection.x, selection.y, selection.width, selection.height);
 }
 
-/** テストのフィクスチャハーネスと揃えた ROI の切り出し条件。 */
-
+/**
+ * 解析の実行先。重い処理（検出・切り出し・色帯解析）はワーカースレッドで
+ * 走らせ、メインスレッドは映像とオーバーレイの描画に専念する。
+ */
+const analysisClient = createDefaultClient();
 
 /**
- * 解析対象の ROI を用意する。
+ * 依頼の通し番号。応答の突き合わせと、古い結果の切り捨てを兼ねる。
  *
- * 自動検出が有効なら、画像全体から抵抗器を探して水平化する
- * （`tests/fixtures` と同じ経路）。無効なら選択範囲をそのまま使う。
+ * 新しい依頼を組んだ時点で、それより前の応答はすべて用済みになる
+ * （`frameId !== lastFrameId` なら捨てる）。カメラの開き直しのように依頼を
+ * 伴わない無効化は {@link invalidateAnalyses} で番号だけ進める。
  */
-function buildRoi(auto: boolean): RoiImage | null {
-  if (source === null) return null;
-  const context = context2d(source, { willReadFrequently: true });
+let lastFrameId = 0;
 
-  if (auto) {
-    const full = context.getImageData(0, 0, source.width, source.height);
-    const image: RoiImage = { width: full.width, height: full.height, data: full.data };
-    const located = locateResistor(image);
-    if (located === null) {
-      statusParts.detection = '抵抗器を検出できません';
-      renderStatus();
-      return null;
-    }
-    // カラーコードの並びで枠を広げ直す（バッチ・較正と同じ経路）
-    const box = refineBoxExtent(located, image, refineOptions(activePalette() ?? undefined));
-    detectedBox = box;
-    statusParts.detection = `検出 ${box.angleDeg.toFixed(0)}° / ${Math.round(box.length)}px`;
-    renderStatus();
-    return rectify(image, box, ROI_OPTIONS);
-  }
-
-  detectedBox = null;
-  statusParts.detection = '手動指定';
-  renderStatus();
-  if (selection === null || selection.width < 1 || selection.height < 1) return null;
-  const roi = context.getImageData(
-    Math.round(selection.x),
-    Math.round(selection.y),
-    Math.round(selection.width),
-    Math.round(selection.height),
-  );
-  return { width: roi.width, height: roi.height, data: roi.data };
+/** 飛んでいる解析の応答を、この後の画面に流し込まない。 */
+function invalidateAnalyses(): void {
+  lastFrameId += 1;
 }
 
 /**
- * ROI を解析し、右カラム（ROI 表示・プロファイル・バンド表・値）を更新する。
- * 静止画とライブの両経路がここを通る。
+ * 解析の依頼を組む。**canvas から画素を取り出すのはここだけ**で、
+ * 以降の解析は DOM に触らない（`analysis/runAnalysis.ts`）。
+ *
+ * `area` を渡すとその範囲だけを切り出す（手動 ROI）。省略するとフレーム全体。
+ * 取り出した画素は転送でバッファごと渡すので、呼び出し側は
+ * 返ってきた依頼の `image` に触らないこと（`protocol.ts` 参照）。
  */
-function renderAnalysis(roi: RoiImage): AnalysisResult {
-  elements.roiCanvas.width = roi.width;
-  elements.roiCanvas.height = roi.height;
-  const roiContext = context2d(elements.roiCanvas);
-  const imageData = roiContext.createImageData(roi.width, roi.height);
-  imageData.data.set(roi.data);
-  roiContext.putImageData(imageData, 0, 0);
+function buildRequest(
+  frame: HTMLCanvasElement,
+  analysisMode: AnalysisMode,
+  area?: Rect,
+): AnalysisRequest | null {
+  const rect = area ?? { x: 0, y: 0, width: frame.width, height: frame.height };
+  if (rect.width < 1 || rect.height < 1) return null;
 
-  // 自動検出のときは検出枠から本体の位置を渡す（バッチ・較正と同じ条件）。
-  // 手動指定のときは枠が無いので、従来どおりプロファイルから推定させる。
-  const effective = activePalette() ?? undefined;
-  const result = analyzeRoi(roi, {
-    adaptWhiteBalance: elements.adaptToggle.checked,
-    ...(detectedBox === null
-      ? effective === undefined
-        ? {}
-        : { segment: { palette: effective } }
-      : analyzeOptions(detectedBox, effective)),
-  });
-  lastResult = result;
+  const context = context2d(frame, { willReadFrequently: true });
+  const pixels = context.getImageData(
+    Math.round(rect.x),
+    Math.round(rect.y),
+    Math.round(rect.width),
+    Math.round(rect.height),
+  );
 
-  drawProfile(elements.profileCanvas, result.profile, result.bands);
-  renderBands(result.bands);
-  renderReading(result);
-  return result;
+  lastFrameId += 1;
+  return {
+    frameId: lastFrameId,
+    image: toTransferImage({ width: pixels.width, height: pixels.height, data: pixels.data }),
+    mode: analysisMode,
+    paletteColors: activePalette()?.colors ?? null,
+  };
 }
 
-function analyzeSelection(): void {
+/**
+ * 依頼を組んで送り、**まだ使える応答なら**返す。
+ *
+ * 追い越された（後から別の依頼を組んだ）結果は捨てる。3 経路が共通で通る。
+ */
+async function requestAnalysis(
+  frame: HTMLCanvasElement,
+  analysisMode: AnalysisMode,
+  area?: Rect,
+): Promise<AnalysisResponse | null> {
+  const request = buildRequest(frame, analysisMode, area);
+  if (request === null) return null;
+
+  const response = await analysisClient.analyze(request);
+  if (response === null || response.frameId !== lastFrameId) return null;
+  return response;
+}
+
+/** 検出枠のステータス表示。 */
+function detectionLabel(box: OrientedBox | null): string {
+  return box === null
+    ? '抵抗器を検出できません'
+    : `検出 ${box.angleDeg.toFixed(0)}° / ${Math.round(box.length)}px`;
+}
+
+/**
+ * 解析結果を右カラム（ROI 表示・プロファイル・バンド表・値）に反映する。
+ * 静止画とライブの両経路がここを通る。**解析はしない**（描画だけ）。
+ */
+function renderAnalysisView(roi: TransferImage | null, analysis: AnalysisSummary): void {
+  if (roi !== null) putPixels(elements.roiCanvas, toRoiImage(roi));
+  lastResult = analysis;
+
+  drawProfile(elements.profileCanvas, analysis.profile, analysis.bands);
+  renderBands(analysis.bands);
+  renderReading(analysis);
+}
+
+async function analyzeSelection(): Promise<void> {
   if (mode !== 'still' || source === null) return;
 
   redrawSource();
 
-  const roi = buildRoi(elements.autoToggle.checked);
-  if (roi === null) return;
+  const auto = elements.autoToggle.checked;
+  if (!auto) {
+    statusParts.detection = '手動指定';
+    renderStatus();
+  }
 
-  drawOverlay(renderAnalysis(roi));
+  let response: AnalysisResponse | null;
+  try {
+    response = auto
+      ? await requestAnalysis(source, { kind: 'auto' })
+      : selection === null
+        ? null
+        : await requestAnalysis(
+            source,
+            { kind: 'roi', adaptWhiteBalance: elements.adaptToggle.checked },
+            selection,
+          );
+  } catch (error) {
+    console.error(error);
+    statusParts.detection = '解析できませんでした';
+    renderStatus();
+    return;
+  }
+
+  if (response === null || mode !== 'still') return;
+
+  if (response.analysis === null) {
+    statusParts.detection = detectionLabel(null);
+    renderStatus();
+    return;
+  }
+  if (response.box !== null) {
+    statusParts.detection = detectionLabel(response.box);
+    renderStatus();
+  }
+
+  renderAnalysisView(response.roi, response.analysis);
+  drawOverlay(response.box, response.analysis);
 }
 
 /**
@@ -395,21 +467,27 @@ function analyzeSelection(): void {
  * 描画には平滑化した枠を使い、解析には生の検出枠を使う（平滑遅れを
  * 色帯読み取りに持ち込まない）。自動検出 OFF のときはガイド枠で読む。
  */
-function analyzeLiveFrame(frame: HTMLCanvasElement): void {
+async function analyzeLiveFrame(frame: HTMLCanvasElement): Promise<void> {
   source = frame;
   updateStickyBar();
 
   if (!liveAutoDetect) {
-    analyzeGuideFrame(frame);
+    await analyzeGuideFrame(frame);
     return;
   }
 
-  detectedBox = null;
-  const roi = buildRoi(true);
-  const result = roi === null ? null : renderAnalysis(roi);
-  if (result !== null) settleReading(result);
+  const response = await requestAnalysis(frame, { kind: 'auto' });
+  // 待っている間にカメラを開き直していたら、この結果はもう別の映像のもの
+  if (response === null || mode !== 'live') return;
 
-  const smoothed = pushBox(smoother, detectedBox);
+  statusParts.detection = detectionLabel(response.box);
+  renderStatus();
+  if (response.analysis !== null) {
+    renderAnalysisView(response.roi, response.analysis);
+    settleReading(response.analysis);
+  }
+
+  const smoothed = pushBox(smoother, response.box);
   smoother = smoothed.state;
   drawLiveOverlay(frame, smoothed.box, false);
 }
@@ -430,7 +508,7 @@ function resetReading(): void {
   elements.liveReadingNote.textContent = '';
 }
 
-function settleReading(result: AnalysisResult): void {
+function settleReading(result: AnalysisSummary): void {
   const settled = pushReading(stabilizer, formatReading(result.reading));
   stabilizer = settled.state;
   if (settled.stable !== null) {
@@ -451,18 +529,18 @@ function settleReading(result: AnalysisResult): void {
  * もらう。カラーコードの読み取りも同じ枠で行うので、見えている枠と
  * 解析範囲が常に一致する。枠は固定なので平滑化は通さない。
  */
-function analyzeGuideFrame(frame: HTMLCanvasElement): void {
-  const context = context2d(frame, { willReadFrequently: true });
-  const full = context.getImageData(0, 0, frame.width, frame.height);
-  const image: RoiImage = { width: full.width, height: full.height, data: full.data };
-
+async function analyzeGuideFrame(frame: HTMLCanvasElement): Promise<void> {
   const box = guideBox(visibleFrameRect(frame));
-  detectedBox = box;
   statusParts.detection = 'ガイドに合わせて読み取り';
   renderStatus();
 
-  const result = renderAnalysis(rectify(image, box, ROI_OPTIONS));
-  settleReading(result);
+  const response = await requestAnalysis(frame, { kind: 'box', box });
+  // 待っている間にカメラを開き直していたら、この結果はもう別の映像のもの
+  if (mode !== 'live') return;
+  if (response !== null && response.analysis !== null) {
+    renderAnalysisView(response.roi, response.analysis);
+    settleReading(response.analysis);
+  }
   drawLiveOverlay(frame, box, true);
 }
 
@@ -549,12 +627,12 @@ function drawLiveOverlay(
  * ようにする。バンドの座標は ROI 列番号なので、`roiMapping` の逆変換で
  * 元画像に戻してから描く。
  */
-function drawOverlay(result: AnalysisResult): void {
-  if (detectedBox === null) return;
+function drawOverlay(box: OrientedBox | null, result: AnalysisSummary): void {
+  if (box === null) return;
 
   // extent でスライスした場合、Band の列番号は ROI 基準のままなので
   // そのまま逆変換できる（roiMapping のテストで固定済み）
-  drawDetectionOverlay(context2d(elements.sourceCanvas), detectedBox, result.bands, {
+  drawDetectionOverlay(context2d(elements.sourceCanvas), box, result.bands, {
     rectify: ROI_OPTIONS,
   });
 }
@@ -661,6 +739,7 @@ async function loadPaletteFromServer(): Promise<void> {
       return;
     }
     palette = withOverrides(DEFAULT_PALETTE, colors as Parameters<typeof withOverrides>[1]);
+    invalidatePalette();
     elements.engineStatus.textContent = `共有パレット: ${count} 色を適用中`;
   } catch {
     elements.engineStatus.textContent = '共有パレット: なし（既定の基準色）';
@@ -671,7 +750,7 @@ async function loadPaletteFromServer(): Promise<void> {
  * 右カラムの読み取り表示。1 フレームごとの生の値を出す。
  * ライブのオーバーレイ表示は {@link settleReading} が確定してから出す。
  */
-function renderReading(result: AnalysisResult): void {
+function renderReading(result: AnalysisSummary): void {
   const text = formatReading(result.reading);
   elements.reading.textContent = text;
   elements.stickyReading.textContent = text;
@@ -745,6 +824,8 @@ function updateStickyBar(): void {
 function stopCamera(): void {
   camera?.stop();
   camera = null;
+  // 飛んでいる解析の応答を、この後の画面に流し込まない
+  invalidateAnalyses();
   cameraControlsHandle?.clear();
   cameraControlsHandle = null;
   setPreviewZoom(1);
@@ -1072,12 +1153,13 @@ function learnFromCurrent(): void {
   }
 
   observations = addObservations(observations, match.assignments);
+  invalidatePalette();
   saveObservations(observations);
   const note = match.toleranceObserved ? '' : '（許容差バンドは検出できず、数字・倍率のみ）';
   elements.learnStatus.textContent =
     `学習しました: ${match.sequence.join('-')}${note}`;
   renderLearnCounts();
-  analyzeSelection(); // 学習直後のパレットで読み直す
+  void analyzeSelection(); // 学習直後のパレットで読み直す
 }
 
 elements.learnButton.addEventListener('click', learnFromCurrent);
@@ -1107,10 +1189,11 @@ elements.learnExport.addEventListener('click', () => {
 
 elements.learnClear.addEventListener('click', () => {
   observations = {};
+  invalidatePalette();
   clearObservations();
   renderLearnCounts();
   elements.learnStatus.textContent = '学習データを消去しました';
-  analyzeSelection();
+  void analyzeSelection();
 });
 
 elements.cameraButton.addEventListener('click', () => {
@@ -1128,7 +1211,8 @@ elements.cameraButton.addEventListener('click', () => {
 elements.liveAutoButton.addEventListener('click', () => {
   liveAutoDetect = !liveAutoDetect;
   elements.liveAutoButton.setAttribute('aria-pressed', String(liveAutoDetect));
-  // 検出方式が変わると枠が飛ぶので、平滑化の履歴は持ち越さない
+  // 検出方式が変わると枠が飛ぶので、平滑化の履歴も飛んでいる解析も持ち越さない
+  invalidateAnalyses();
   smoother = createSmoother();
   resetReading();
   statusParts.detection = '';
@@ -1179,7 +1263,6 @@ elements.sampleButton.addEventListener('click', () => {
 elements.resetButton.addEventListener('click', () => {
   stopCamera();
   source = null;
-  detectedBox = null;
   lastResult = null;
   applyMode('idle');
   elements.fileInput.value = '';
@@ -1192,11 +1275,15 @@ elements.resetButton.addEventListener('click', () => {
   elements.readingNote.textContent = '';
 });
 
-elements.adaptToggle.addEventListener('change', analyzeSelection);
+elements.adaptToggle.addEventListener('change', () => {
+  void analyzeSelection();
+});
 
 elements.labelName.addEventListener('input', renderLabelJson);
 
-elements.autoToggle.addEventListener('change', analyzeSelection);
+elements.autoToggle.addEventListener('change', () => {
+  void analyzeSelection();
+});
 
 elements.saveLabel.addEventListener('click', saveCurrentLabel);
 
@@ -1233,7 +1320,7 @@ elements.sourceCanvas.addEventListener('pointerup', (event) => {
   if (dragStart === null) return;
   elements.sourceCanvas.releasePointerCapture(event.pointerId);
   dragStart = null;
-  analyzeSelection();
+  void analyzeSelection();
 });
 
 /**

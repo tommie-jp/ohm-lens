@@ -48,8 +48,14 @@ export interface CameraOptions {
   readonly analysisFps?: number;
   /** プレビューに使う video 要素。未指定なら DOM 外に生成する。 */
   readonly videoElement?: HTMLVideoElement;
-  /** 間引いたフレームごとに呼ばれる。縮小済みの canvas を渡す。 */
-  readonly onFrame: (frame: HTMLCanvasElement) => void;
+  /**
+   * 間引いたフレームごとに呼ばれる。縮小済みの canvas を渡す。
+   *
+   * Promise を返すと、その完了までを 1 フレームの処理時間として測り、
+   * 完了するまで次のフレームは渡さない（解析をワーカースレッドへ
+   * 追い出したときのバックプレッシャ）。
+   */
+  readonly onFrame: (frame: HTMLCanvasElement) => void | Promise<void>;
   /** 負荷の実測値。fps 表示と自動調整の状況を出すのに使う。 */
   readonly onStats?: (stats: FrameStats, analysisPx: number) => void;
   readonly onError: (error: unknown) => void;
@@ -168,25 +174,59 @@ export async function startCamera(options: CameraOptions): Promise<CameraSession
   let lastAnalysed = 0;
   let digitalZoom = 1;
 
+  /**
+   * 解析が終わるまで次のフレームを渡さない（in-flight は常に 1 本）。
+   *
+   * frameCanvas は使い回しなので、解析中に上書きすると解析が見ている画素と
+   * 表示が食い違う。溜めずに捨てるのは、次のフレームがすぐ来る以上、
+   * 待たせるより新しい画で測り直すほうが結果が新鮮になるため。
+   */
+  let analysing = false;
+
   const onFrame = (): void => {
     if (stopped) return;
 
+    // 解析中は次のフレームを取りに行かない。空回りのコールバックで毎フレーム
+    // メインスレッドを起こすと、ブラウザが省電力に入る余地を潰す。
+    // 受け取りの再開は finish() が行う
     const now = performance.now();
-    if (now - lastAnalysed >= 1000 / budget.targetFps) {
+    if (analysing || now - lastAnalysed < 1000 / budget.targetFps) {
+      schedule();
+      return;
+    }
+
+    {
       lastAnalysed = now;
+      analysing = true;
       const started = performance.now();
+
+      // 実測して間引き間隔と解析解像度を自動調整する。解析をワーカースレッドへ
+      // 移した後も、待ち時間と転送を含めた 1 フレームの総コストを測る
+      const finish = (): void => {
+        analysing = false;
+        if (stopped) return;
+        budget = recordFrame(budget, performance.now() - started);
+        const stats = frameStats(budget);
+        if (stats !== null) options.onStats?.(stats, analysisSize(budget));
+        // 解析中は登録を止めていたので、ここから受け取りを再開する
+        schedule();
+      };
+
       try {
         drawScaled(video, frameCanvas, analysisSize(budget), digitalZoom);
-        options.onFrame(frameCanvas);
+        const pending = options.onFrame(frameCanvas);
+        if (pending === undefined) finish();
+        else {
+          pending.then(finish, (error: unknown) => {
+            finish();
+            options.onError(error);
+          });
+        }
       } catch (error) {
+        finish();
         options.onError(error);
       }
-      // 実測して間引き間隔と解析解像度を自動調整する
-      budget = recordFrame(budget, performance.now() - started);
-      const stats = frameStats(budget);
-      if (stats !== null) options.onStats?.(stats, analysisSize(budget));
     }
-    schedule();
   };
 
   // rVFC は Firefox 132+ を含め主要ブラウザで使えるが、
