@@ -75,6 +75,16 @@ body {
   border-radius: 10px;
   background: var(--surface);
   overflow: hidden;
+
+  /*
+   * 映像の上では選択・コピーをさせない。長押しで OS のメニュー
+   * （コピー・共有・「写真を保存」）が出ると、撮影やガイド合わせの邪魔に
+   * なる。コピーが要る場所（学習結果・正解ラベル）は別のカードなので
+   * ここだけに効かせる。
+   */
+  user-select: none;
+  -webkit-user-select: none;
+  -webkit-touch-callout: none;
 }
 
 #source-canvas {

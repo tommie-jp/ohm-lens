@@ -23,9 +23,9 @@
     <main class="layout">
       <!-- 左: 映像と入力操作 -->
       <section class="stage" aria-label="映像">
-        <div class="stage-media">
+        <div class="stage-media" id="stage-media">
           <div class="live-wrap" id="live-wrap" hidden>
-            <video id="live-video" playsinline muted></video>
+            <video id="live-video" playsinline muted disablepictureinpicture></video>
             <canvas id="overlay-canvas" aria-hidden="true"></canvas>
           </div>
           <div class="shutter-flash" id="shutter-flash" aria-hidden="true"></div>

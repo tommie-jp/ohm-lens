@@ -70,6 +70,7 @@ interface Rect {
 }
 
 const elements = {
+  stageMedia: requireElement<HTMLDivElement>('#stage-media'),
   liveWrap: requireElement<HTMLDivElement>('#live-wrap'),
   liveVideo: requireElement<HTMLVideoElement>('#live-video'),
   overlayCanvas: requireElement<HTMLCanvasElement>('#overlay-canvas'),
@@ -1033,7 +1034,45 @@ function takeScreenshot(): void {
     });
 }
 
-elements.screenshotButton.addEventListener('click', takeScreenshot);
+/**
+ * シャッターは `pointerup` で受ける。
+ *
+ * `click` は「タップと見なせたか」の判定を経てから合成されるので、指が
+ * わずかに動いたときや処理が立て込んだときに**握り潰される**ことがある。
+ * `pointerup` は生のポインタ事象なので必ず届き、かつ保存に必要な
+ * ユーザー操作の権利も得られる（`pointerdown` では得られない環境がある
+ * ため、そちらは使わない）。
+ *
+ * キーボード操作（Enter / Space）は `pointerup` を伴わないので `click` も
+ * 残す。両方から呼ばれる二重撮影は、直前の撮影からの間隔で弾く。
+ */
+const SHUTTER_DEBOUNCE_MS = 600;
+let lastShutterAt = Number.NEGATIVE_INFINITY;
+
+function requestScreenshot(): void {
+  const now = performance.now();
+  if (now - lastShutterAt < SHUTTER_DEBOUNCE_MS) return;
+  lastShutterAt = now;
+  takeScreenshot();
+}
+
+elements.screenshotButton.addEventListener('pointerup', (event) => {
+  if (event.button !== 0) return; // 右クリック・中クリックでは撮らない
+  requestScreenshot();
+});
+
+elements.screenshotButton.addEventListener('click', requestScreenshot);
+
+/**
+ * 映像の上では OS のメニューを出さない。
+ *
+ * 長押し（iOS）や右クリックで「コピー」「画像を保存」が出ると、ガイドに
+ * 合わせている最中に割り込まれる。保存はこちらのシャッターに一本化する。
+ * 選択の禁止は CSS 側（`.stage-media`）。
+ */
+elements.stageMedia.addEventListener('contextmenu', (event) => {
+  event.preventDefault();
+});
 
 /**
  * 2 本指のピンチで映像だけを拡大する。
