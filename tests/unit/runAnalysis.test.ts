@@ -120,6 +120,7 @@ describe('runAnalysis: auto モード', () => {
     expect(Object.keys(response.analysis ?? {}).sort()).toEqual([
       'anchor',
       'bands',
+      'joint',
       'profile',
       'reading',
       'runs',
@@ -157,6 +158,36 @@ describe('runAnalysis: box モード（ライブガイド）', () => {
     // Assert
     expect(response.roi).not.toBeNull();
     expect(response.analysis?.reading?.ohms).toBeCloseTo(SAMPLE_EXPECTED.ohms, 6);
+  });
+
+  it('本体より大きいガイド枠は、返す枠が本体に絞り込まれている', () => {
+    // Arrange: 実際のガイドと同じく、本体より一回り大きい枠を渡す
+    const image = createSampleImage();
+    const located = runAnalysis(requestFor(image, { kind: 'auto' }));
+    const tight = located.box as NonNullable<typeof located.box>;
+    const guide = { ...tight, length: tight.length * 1.4, thickness: tight.thickness * 2 };
+
+    // Act
+    const response = runAnalysis(requestFor(image, { kind: 'box', box: guide }));
+
+    // Assert: 枠 = 本体の前提で解析条件を組む前に絞られている
+    expect(response.box).not.toBeNull();
+    expect(response.box?.thickness ?? Infinity).toBeLessThan(guide.thickness);
+    expect(response.box?.length ?? Infinity).toBeLessThan(guide.length);
+  });
+
+  it('絞り込んでも、枠をガイドより大きくはしない', () => {
+    // Arrange: すでに本体に沿った枠
+    const image = createSampleImage();
+    const located = runAnalysis(requestFor(image, { kind: 'auto' }));
+    const tight = located.box as NonNullable<typeof located.box>;
+
+    // Act
+    const response = runAnalysis(requestFor(image, { kind: 'box', box: tight }));
+
+    // Assert
+    expect(response.box?.thickness ?? Infinity).toBeLessThanOrEqual(tight.thickness);
+    expect(response.box?.length ?? Infinity).toBeLessThanOrEqual(tight.length);
   });
 });
 

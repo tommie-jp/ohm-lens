@@ -43,7 +43,13 @@ describe.skipIf(!hasSamples())('診断ダンプ', () => {
     const expectedByFile = new Map(loadManifest().map((entry) => [entry.file, entry]));
     const lines: string[] = ['解析条件: core/settings.ts（doDetect.sh と同一）', ''];
 
-    for (const file of TARGETS) {
+    // 検体セットはセッションを跨いで入れ替わる（枚数も名前も動く）。無くなった
+    // 検体で道具ごと落とさない — 調査対象の当たり外れは道具の正しさではない
+    const targets = TARGETS.filter((file) => expectedByFile.has(file));
+    const missing = TARGETS.filter((file) => !expectedByFile.has(file));
+    if (missing.length > 0) lines.push(`※ 見つからない検体は飛ばした: ${missing.join(', ')}`, '');
+
+    for (const file of targets) {
       const entry = expectedByFile.get(file);
       const image = await loadImage(file);
       const read = readResistorImage(image, {

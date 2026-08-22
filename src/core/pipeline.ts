@@ -13,7 +13,7 @@ import type { ColorRun } from './bands/runs.js';
 import { bodyExtent, type BodyExtent, type BodyExtentOptions } from './bands/extent.js';
 import { normalizeLightness, type NormalizeOptions } from './bands/normalize.js';
 import { readResistor } from './value/decode.js';
-import { jointReadResistor } from './value/jointDecode.js';
+import { jointReadResistor, type JointReading } from './value/jointDecode.js';
 import { buildBodyAnchorAdaptation } from './color/anchor.js';
 import { adaptToAnchor } from './color/whiteBalance.js';
 import type { Adaptation } from './color/whiteBalance.js';
@@ -90,6 +90,15 @@ export interface AnalysisResult {
    * 別に計算すると、ランと本体色が違うものを指して判定がずれる。
    */
   readonly bodyLab: LabColor | null;
+  /**
+   * 同時デコードの結果。解が出なければ null（`reading` は従来法に落ちる）。
+   *
+   * **`reading` と別に持つのは、役割つきの解釈を捨てないため。** どのランを
+   * 採用し、どれを除外したか（`usedRuns` / `droppedRuns`）は表示に要る。
+   * 呼び出し側が同じランでデコードし直すと、条件を 1 つ取り違えただけで
+   * 「画面の解釈」と「値の解釈」が食い違う。
+   */
+  readonly joint: JointReading | null;
   readonly reading: ResistorReading | null;
   /**
    * バンド色の行方向のばらつき（ΔE2000 の最大）。測れなければ null。
@@ -179,12 +188,12 @@ export function analyzeRoi(image: RoiImage, options: AnalyzeOptions = {}): Analy
 
   // 同時デコード（色候補 × カラーコード表 × E系列で全体最適）を優先し、
   // 解が出なければ従来の「独立分類 → デコード」に落とす
-  const reading =
-    jointReadResistor(runs, {
-      ...(segmentOptions.palette === undefined ? {} : { palette: segmentOptions.palette }),
-      verticalSpread,
-      bodyLab: stages.bodyLab,
-    }) ?? (bands.length === 0 ? null : readResistor(bands, roiLength));
+  const joint = jointReadResistor(runs, {
+    ...(segmentOptions.palette === undefined ? {} : { palette: segmentOptions.palette }),
+    verticalSpread,
+    bodyLab: stages.bodyLab,
+  });
+  const reading = joint ?? (bands.length === 0 ? null : readResistor(bands, roiLength));
 
   return {
     profile,
@@ -193,6 +202,7 @@ export function analyzeRoi(image: RoiImage, options: AnalyzeOptions = {}): Analy
     bands,
     runs,
     bodyLab: stages.bodyLab,
+    joint,
     reading,
     verticalSpread,
     anchor: refined?.anchor ?? coarse?.anchor ?? null,

@@ -4,7 +4,7 @@ import { rectify } from '../core/rectify.js';
 import { refineBoxExtent } from '../core/refine.js';
 import { analyzeOptions, refineOptions, ROI_OPTIONS } from '../core/settings.js';
 import { formatConfidence, formatOhms, isReadableSize, isReportable } from '../core/format.js';
-import { jointReadResistor, type JointReading } from '../core/value/jointDecode.js';
+import type { JointReading } from '../core/value/jointDecode.js';
 import { DEFAULT_PALETTE, type Palette } from '../core/color/palette.js';
 import type { RoiImage } from '../core/bands/profile.js';
 
@@ -86,13 +86,9 @@ export function readResistorImage(image: RoiImage, options: ReadOptions = {}): R
   const box = refineBoxExtent(located, image, refineOptions(palette));
   const roi = rectify(image, box, ROI_OPTIONS);
   const analysis = analyzeRoi(roi, analyzeOptions(box, palette));
-  // 役割つきの解釈が要るので、同じランで joint デコードを取り直す。
-  // **同じ条件で呼ぶこと** — 確信度が analysis 側とずれるとレポートが二枚舌になる
-  const joint = jointReadResistor(analysis.runs, {
-    palette,
-    verticalSpread: analysis.verticalSpread,
-    bodyLab: analysis.bodyLab,
-  });
+  // 役割つきの解釈は解析が持っているものをそのまま使う。**取り直さない** —
+  // 条件を 1 つ取り違えただけで確信度が analysis 側とずれ、レポートが二枚舌になる
+  const joint = analysis.joint;
 
   // 読める解像度に達していない枠からは値を出さない。バンド 1 本が数画素しか
   // ない枠を rectify が拡大しても情報は増えず、当たっていても偶然になる

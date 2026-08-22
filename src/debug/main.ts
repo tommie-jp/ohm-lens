@@ -21,6 +21,7 @@ import {
   type Observations,
 } from '../core/learning.js';
 import { parseOhms } from '../core/value/parseOhms.js';
+import type { JointReading } from '../core/value/jointDecode.js';
 import { clearObservations, loadObservations, saveObservations } from './learnStore.js';
 import { releaseWakeLock, requestWakeLock } from './wakeLock.js';
 import {
@@ -34,7 +35,7 @@ import { createSampleCanvas } from './sample.js';
 import { drawProfile } from './profileView.js';
 import { context2d, putPixels } from './canvas.js';
 import { decodeImageFile } from './decodeImage.js';
-import { drawDetectionOverlay, drawGuideCenterline, drawReadingLabel } from './detectionOverlay.js';
+import { drawDetectionOverlay, drawGuideOutline, drawReadingLabel } from './detectionOverlay.js';
 import { SUPPORTED_ACCEPT } from '../core/imageFormat.js';
 import { listCameras, pickPreferredCamera, startCamera, type CameraSession } from './camera.js';
 import { describeCameraError, shortCameraLabel } from './cameraSupport.js';
@@ -219,6 +220,13 @@ let stableReadingText: string | null = null;
  * 差し替える。毎フレーム描き直すとちらついて色名が読めない。
  */
 let stableBands: readonly Band[] = [];
+/**
+ * オーバーレイに出すバンドの解釈（採用したラン・除外したラン）。
+ *
+ * **`stableBands` と同じフレームのものを一緒に固定する。** 別々に更新すると、
+ * 前のフレームの役割を今のバンドに貼ることになり、番号と意味がずれる。
+ */
+let stableJoint: JointReading | null = null;
 /** 読み取り値のちらつき止め。カメラや検出方式が変わるたびに作り直す。 */
 let stabilizer: StabilizerState = createStabilizer();
 
@@ -566,7 +574,7 @@ async function analyzeLiveFrame(frame: HTMLCanvasElement): Promise<void> {
 
     const smoothed = pushBox(smoother, response.box);
     smoother = smoothed.state;
-    drawLiveOverlay(frame, smoothed.box, false);
+    drawLiveOverlay(frame, smoothed.box, null);
   });
 }
 
@@ -582,6 +590,7 @@ function resetReading(): void {
   stabilizer = createStabilizer();
   stableReadingText = null;
   stableBands = [];
+  stableJoint = null;
   elements.liveReadingValue.textContent = '?';
   elements.liveReadingNote.textContent = '';
 }
@@ -591,8 +600,9 @@ function settleReading(result: AnalysisSummary): void {
   stabilizer = settled.state;
   if (settled.stable !== null) {
     stableReadingText = settled.stable;
-    // 値と一緒にバンドも確定させる（表示は次に確定するまで動かさない）
+    // 値と一緒にバンドとその解釈も確定させる（表示は次に確定するまで動かさない）
     stableBands = result.bands;
+    stableJoint = result.joint;
   }
 
   const confirmed = settled.stable ?? stableReadingText;
@@ -621,7 +631,11 @@ async function analyzeGuideFrame(frame: HTMLCanvasElement): Promise<void> {
       renderAnalysisView(response.roi, response.analysis);
       settleReading(response.analysis);
     }
-    drawLiveOverlay(frame, box, true);
+    // 赤い枠は「解析が本体と見なした範囲」＝絞り込んだ枠。ガイドとずれて
+    // いれば、それ自体が「もっと枠に合わせて」という手がかりになる。
+    // 解析が返らなかったフレームでは赤を出さない — ガイドと同じ枠を赤で
+    // 描くと「その範囲を読めた」という誤った合図になる
+    drawLiveOverlay(frame, response?.box ?? null, box);
   });
 }
 
@@ -671,7 +685,7 @@ function overlayTextPx(frame: HTMLCanvasElement, screenPx: number): number {
 function drawLiveOverlay(
   frame: HTMLCanvasElement,
   box: OrientedBox | null,
-  isGuide: boolean,
+  guide: OrientedBox | null,
 ): void {
   const overlay = elements.overlayCanvas;
   if (overlay.width !== frame.width || overlay.height !== frame.height) {
@@ -680,16 +694,21 @@ function drawLiveOverlay(
   }
   const context = context2d(overlay);
   context.clearRect(0, 0, overlay.width, overlay.height);
+  // ガイドは解析の成否に関わらず出す。置き場所の目印なので消えると困る
+  if (guide !== null) drawGuideOutline(context, guide, overlayTextPx(frame, 1));
   if (box === null) return;
 
-  // バンドは確定したものを描く（毎フレーム描き直すとちらついて読めない）
+  // バンドは確定したものを描く（毎フレーム描き直すとちらついて読めない）。
+  // 意味は値を決めた解釈（joint）から引く — 表示だけ独立分類のままにすると、
+  // デコーダが除外した本体色のランがカラーコードとして出る
   drawDetectionOverlay(context, box, stableBands, {
     rectify: ROI_OPTIONS,
     japanese: false,
     textPx: overlayTextPx(frame, LIVE_LABEL_SCREEN_PX),
+    ...(stableJoint === null
+      ? {}
+      : { usedRuns: stableJoint.usedRuns, droppedRuns: stableJoint.droppedRuns }),
   });
-  // ガイドには軸合わせの中心線を添える
-  if (isGuide) drawGuideCenterline(context, box, overlayTextPx(frame, 1));
   // 値は確定してから出す（揺れている間は何も出さない）
   if (stableReadingText !== null) {
     drawReadingLabel(

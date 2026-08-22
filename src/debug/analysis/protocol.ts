@@ -75,7 +75,7 @@ export interface AnalysisRequest {
  */
 export type AnalysisSummary = Pick<
   AnalysisResult,
-  'profile' | 'bands' | 'runs' | 'reading' | 'anchor'
+  'profile' | 'bands' | 'runs' | 'reading' | 'anchor' | 'joint'
 >;
 
 /** Worker → メイン: 解析結果。 */

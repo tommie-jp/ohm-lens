@@ -2,6 +2,7 @@ import { readResistorImage } from '../../annotate/read.js';
 import { analyzeRoi, type AnalysisResult } from '../../core/pipeline.js';
 import { rectify } from '../../core/rectify.js';
 import { analyzeOptions, ROI_OPTIONS } from '../../core/settings.js';
+import { shrinkBoxToBody } from '../../core/shrink.js';
 import { createPalette, type Palette } from '../../core/color/palette.js';
 import type { OrientedBox } from '../../core/locate.js';
 import type { RoiImage } from '../../core/bands/profile.js';
@@ -41,6 +42,8 @@ function summarize(result: AnalysisResult): AnalysisSummary {
     runs: result.runs,
     reading: result.reading,
     anchor: result.anchor,
+    // 役割つきの解釈。表示を値と同じ解釈で描くために要る（`detectionOverlay`）
+    joint: result.joint,
   };
 }
 
@@ -79,13 +82,20 @@ function analyse(
     };
   }
 
-  // ガイド枠は検出済みの枠として扱う。切り出しから先は auto と同じ条件
+  // ガイド枠は検出済みの枠として扱う。切り出しから先は auto と同じ条件。
+  //
+  // **枠をそのまま渡さず、先に本体へ絞り込む。** ガイドは「ここに合わせて
+  // ください」という目印なので必ず本体より大きく、`analyzeOptions` が置く
+  // 「枠 = 本体」の前提が丸ごと外れる。とくに `rectify` は短軸を
+  // `targetHeight` に正規化するので、太い枠はそのまま長軸の分解能を削る
+  // （43 枚で太さ 2 倍の枠を測ると正解 32 → 2・誤答 1 → 12。`core/shrink.ts`）
   if (mode.kind === 'box') {
-    const roi = rectify(image, mode.box, ROI_OPTIONS);
+    const box = shrinkBoxToBody(mode.box, image);
+    const roi = rectify(image, box, ROI_OPTIONS);
     return {
-      box: mode.box,
+      box,
       roi: toTransferImage(roi),
-      analysis: summarize(analyzeRoi(roi, analyzeOptions(mode.box, palette))),
+      analysis: summarize(analyzeRoi(roi, analyzeOptions(box, palette))),
     };
   }
 

@@ -3,7 +3,7 @@ import type { OrientedBox } from '../core/locate.js';
 import type { RectifyOptions } from '../core/rectify.js';
 import { bandCorners, labelAnchor, labelDirection, labelSide } from '../core/roiMapping.js';
 import { BAND_COLOR_ABBR, BAND_COLOR_JA, bandColorCss } from '../core/color/colors.js';
-import { roleTextsFor } from '../core/value/jointDecode.js';
+import { roleTextsFor, type UsedRun } from '../core/value/jointDecode.js';
 
 /**
  * 検出結果を元の写真に焼き込む。
@@ -56,6 +56,35 @@ export interface OverlayOptions {
    * 見た目の大きさを一定にしたいので、換算した値を渡す。
    */
   readonly textPx?: number;
+  /**
+   * 同時デコードが採用したラン（`JointReading.usedRuns`）。
+   *
+   * 与えると、意味の欄は**デコーダが決めた役割**になり、採用されなかった
+   * ランは「除外」として破線・半透明で描かれる。省略すると従来どおり
+   * 全バンドから独立に役割を組み立てる（joint の解が無い経路向け）。
+   *
+   * 表示だけを独立分類のままにすると、金属容疑として除外した本体色のランが
+   * カラーコードとして画面に出る。値は守られているのに読み取りが壊れて
+   * 見えるので、**画面と値は同じ解釈から描く**。
+   */
+  readonly usedRuns?: readonly UsedRun[];
+  /** ノイズとして捨てたランの添字（`JointReading.droppedRuns`）。 */
+  readonly droppedRuns?: readonly number[];
+}
+
+/** 除外したランの帯・意味に使う色。バンド色と紛れないよう灰色にする。 */
+const DROPPED_COLOR = '#8e8e93';
+
+/** 除外したランの帯の破線の刻み [px]（文字サイズに対する割合で使う）。 */
+const DROPPED_DASH_RATIO = [0.35, 0.28] as const;
+
+/** 除外したランを描く不透明度。 */
+const DROPPED_ALPHA = 0.5;
+
+/** バンドの不透明度。除外を最優先で薄くし、それ以外は確信度が低ければ薄くする。 */
+function bandAlpha(isDropped: boolean, confidence: number): number {
+  if (isDropped) return DROPPED_ALPHA;
+  return confidence < LOW_CONFIDENCE ? 0.55 : 1;
 }
 
 /**
@@ -107,13 +136,23 @@ function drawPolygon(
  * 「検出した箱そのもの」。ここだけ素の寸法から四隅を出す。
  */
 export function drawDetectionBox(context: CanvasRenderingContext2D, box: OrientedBox): void {
+  context.save();
+  context.strokeStyle = BOX_COLOR;
+  context.lineWidth = Math.max(2, Math.round(box.thickness / 14));
+  drawPolygon(context, boxCorners(box));
+  context.stroke();
+  context.restore();
+}
+
+/** 箱の四隅（元画像座標）。パディングは含まない。 */
+function boxCorners(box: OrientedBox): { x: number; y: number }[] {
   const rad = (box.angleDeg * Math.PI) / 180;
   const cos = Math.cos(rad);
   const sin = Math.sin(rad);
   const halfLength = box.length / 2;
   const halfThickness = box.thickness / 2;
 
-  const points = (
+  return (
     [
       [-halfLength, -halfThickness],
       [halfLength, -halfThickness],
@@ -124,13 +163,6 @@ export function drawDetectionBox(context: CanvasRenderingContext2D, box: Oriente
     x: box.centerX + along * cos - across * sin,
     y: box.centerY + along * sin + across * cos,
   }));
-
-  context.save();
-  context.strokeStyle = BOX_COLOR;
-  context.lineWidth = Math.max(2, Math.round(box.thickness / 14));
-  drawPolygon(context, points);
-  context.stroke();
-  context.restore();
 }
 
 /** 各バンドの範囲を帯で塗り、色名を縁の外側に添える。 */
@@ -153,8 +185,12 @@ export function drawBandLabels(
   // 注釈の向きへ回す角度。水平な抵抗器なら 90°＝文字は下へ伸び、文字の下
   // （ベースライン側）が画面の左を向く
   const angle = Math.atan2(direction.y, direction.x);
-  // 色列が表す意味（数字・倍率・許容差）。読み取り方向は core が決める
-  const roleTexts = roleTextsFor(bands.map((band) => band.color));
+  // 色列が表す意味（数字・倍率・許容差）。読み取り方向は core が決める。
+  // デコーダの解釈が渡されていればそちらが正で、独立分類からは組み立て直さない
+  const usedByIndex = new Map((options.usedRuns ?? []).map((used) => [used.runIndex, used]));
+  const dropped = new Set(options.droppedRuns ?? []);
+  const fallbackRoles =
+    options.usedRuns === undefined ? roleTextsFor(bands.map((band) => band.color)) : null;
 
   context.save();
   context.font = `700 ${fontPx}px system-ui, sans-serif`;
@@ -162,13 +198,22 @@ export function drawBandLabels(
   context.textBaseline = 'middle';
 
   bands.forEach((band, index) => {
-    // 帯: バンドの占める範囲を示す（塗らない。色帯そのものを隠さないため）
-    drawPolygon(context, bandCorners(box, options.rectify, band));
-    context.strokeStyle = bandColorCss(band.color);
-    context.lineWidth = Math.max(1, Math.round(box.thickness / 22));
-    context.stroke();
+    const used = usedByIndex.get(index);
+    // 採用情報があるのに載っていないランは、デコーダが使わなかったということ
+    const isDropped = dropped.has(index) || (options.usedRuns !== undefined && used === undefined);
 
-    context.globalAlpha = band.confidence < LOW_CONFIDENCE ? 0.55 : 1;
+    // 帯: バンドの占める範囲を示す（塗らない。色帯そのものを隠さないため）
+    context.save();
+    drawPolygon(context, bandCorners(box, options.rectify, band));
+    context.strokeStyle = isDropped ? DROPPED_COLOR : bandColorCss(band.color);
+    context.lineWidth = Math.max(1, Math.round(box.thickness / 22));
+    if (isDropped) {
+      context.setLineDash(DROPPED_DASH_RATIO.map((step) => Math.max(2, step * fontPx)));
+    }
+    context.stroke();
+    context.restore();
+
+    context.globalAlpha = bandAlpha(isDropped, band.confidence);
 
     // 番号: バンドのすぐ外側。色空間の面に出る番号と対応する
     const numberAt = labelAnchor(box, options.rectify, band, fontPx * 0.8, side);
@@ -207,8 +252,17 @@ export function drawBandLabels(
     const name = (options.japanese ?? true)
       ? BAND_COLOR_JA[band.color]
       : BAND_COLOR_ABBR[band.color];
-    drawSidewaysText(context, nameAt, angle, name, BOX_COLOR, fontPx);
-    drawSidewaysText(context, valueAt, angle, roleTexts[index] ?? '?', BOX_COLOR, fontPx);
+    // 意味は「デコーダがどう扱ったか」。除外したものは値を書かず、そう書く
+    const meaning = isDropped ? '除外' : (used?.roleText ?? fallbackRoles?.[index] ?? '?');
+    drawSidewaysText(context, nameAt, angle, name, isDropped ? DROPPED_COLOR : BOX_COLOR, fontPx);
+    drawSidewaysText(
+      context,
+      valueAt,
+      angle,
+      meaning,
+      isDropped ? DROPPED_COLOR : BOX_COLOR,
+      fontPx,
+    );
     context.globalAlpha = 1;
   });
 
@@ -218,6 +272,31 @@ export function drawBandLabels(
 /** ガイドの中心線の太さと破線の刻み [px]（`unitPx` 倍して使う）。 */
 const GUIDE_LINE_WIDTH = 1.5;
 const GUIDE_DASH = [6, 5] as const;
+
+/**
+ * ガイド枠そのもの（白い破線の長方形と中心線）。
+ *
+ * **赤い枠とは見た目を分ける。** 赤は「解析が本体と見なした範囲」に使うので、
+ * 利用者が合わせる目印を同じ色で描くと、両者がずれているときに気づけない。
+ * 白い破線が置き場所、赤が実際に読んだ範囲。
+ *
+ * @param unitPx 画面 1px に相当する描画先の px 数（線の太さを一定に保つ）
+ */
+export function drawGuideOutline(
+  context: CanvasRenderingContext2D,
+  box: OrientedBox,
+  unitPx = 1,
+): void {
+  context.save();
+  context.strokeStyle = 'rgb(255 255 255 / 0.9)';
+  context.lineWidth = GUIDE_LINE_WIDTH * unitPx;
+  context.setLineDash(GUIDE_DASH.map((step) => step * unitPx));
+  drawPolygon(context, boxCorners(box));
+  context.stroke();
+  context.restore();
+
+  drawGuideCenterline(context, box, unitPx);
+}
 
 /**
  * ガイド枠の長手方向の中心線（細い白の点線）。
