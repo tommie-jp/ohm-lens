@@ -1,5 +1,9 @@
 # OhmLens
 
+> [!WARNING]
+> **本プロジェクトはまだ実験中で、実用レベルに達していません。**
+> 読み取り結果は誤る可能性があります。実際の回路設計・部品選定には使用しないでください。
+
 Web カメラに映した抵抗器の抵抗値を、リアルタイムで映像にオーバーレイ表示する Web アプリ。
 
 Author: [tommie.jp](https://tommie.jp) ([@tommie-jp](https://github.com/tommie-jp))
